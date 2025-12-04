@@ -1,30 +1,15 @@
-import importlib
-import pkgutil
-import os
-import sys
+# Root initializer for COMFYUI_PROMPTMODELS
+# This file allows ComfyUI / ComfyDeploy to detect all submodules under this repo
 
-# Asegura que el path actual está disponible para importación
-sys.path.append(os.path.dirname(__file__))
+from .get_last_frame import NODE_CLASS_MAPPINGS as GET_LAST_FRAME_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as GET_LAST_FRAME_NAME_MAPPINGS
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
-def _try_import_submodules():
-    current_dir = os.path.dirname(__file__)
-    for _, module_name, _ in pkgutil.iter_modules([current_dir]):
-        try:
-            # Solo importar subcarpetas (como get_last_frame)
-            if module_name.startswith("_"):
-                continue
-            module = importlib.import_module(f"{__name__}.{module_name}")
-            if hasattr(module, "NODE_CLASS_MAPPINGS"):
-                NODE_CLASS_MAPPINGS.update(module.NODE_CLASS_MAPPINGS)
-            if hasattr(module, "NODE_DISPLAY_NAME_MAPPINGS"):
-                NODE_DISPLAY_NAME_MAPPINGS.update(module.NODE_DISPLAY_NAME_MAPPINGS)
-            print(f"[ComfyDeploy] ✅ Loaded submodule: {module_name}")
-        except Exception as e:
-            print(f"[ComfyDeploy] ❌ Failed to import {module_name}: {e}")
+# Register submodules (add more here if you create new nodes later)
+NODE_CLASS_MAPPINGS.update(GET_LAST_FRAME_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(GET_LAST_FRAME_NAME_MAPPINGS)
 
-_try_import_submodules()
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
-print("[ComfyDeploy] ✅ COMFYUI_PROMPTMODELS root module loaded successfully.")
+print("[ComfyDeploy] ✅ COMFYUI_PROMPTMODELS module loaded successfully.")
