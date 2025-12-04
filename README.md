@@ -1,0 +1,2 @@
+# COMFYUI_PROMPTMODELS
+“Custom nodes for ComfyUI by PROMPTMODELS”
