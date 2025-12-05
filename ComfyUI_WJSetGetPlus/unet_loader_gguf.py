@@ -222,7 +222,8 @@ class UnetLoaderGGUF:
     def _load_bin(self, path: str) -> dict:
         """Carga un archivo .bin (formato HuggingFace)."""
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        state_dict = torch.load(path, map_location=device, weights_only=True)
+        # weights_only=False para compatibilidad con PyTorch < 2.2
+        state_dict = torch.load(path, map_location=device, weights_only=False)
         print(f"[UnetLoaderGGUF] Loaded .bin with {len(state_dict)} tensors")
         return state_dict
 
