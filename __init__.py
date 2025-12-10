@@ -13,11 +13,6 @@ from .text_prompt_blocker import (
     NODE_DISPLAY_NAME_MAPPINGS as TEXT_PROMPT_BLOCKER_NAME_MAPPINGS,
 )
 
-# Import Prompt-related nodes
-from .nodes.prompt_model_loader import PromptModelLoader
-from .nodes.prompt_refiner import PromptRefiner
-from .nodes.prompt_info import PromptInfo
-
 # Base node registry
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -30,19 +25,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(GET_LAST_FRAME_NAME_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(TEXT_PROMPT_BLOCKER_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(TEXT_PROMPT_BLOCKER_NAME_MAPPINGS)
 
-# Register Prompt Models
-NODE_CLASS_MAPPINGS.update({
-    "PromptModelLoader": PromptModelLoader,
-    "PromptRefiner": PromptRefiner,
-    "PromptInfo": PromptInfo,
-})
-
-NODE_DISPLAY_NAME_MAPPINGS.update({
-    "PromptModelLoader": "🧠 Prompt Model Loader",
-    "PromptRefiner": "✨ Prompt Refiner",
-    "PromptInfo": "ℹ️ Prompt Info",
-})
-
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
-print("[COMFYUI_PROMPTMODELS] ✅ Nodes registered: PromptModelLoader, PromptRefiner, PromptInfo, GetLastFrame, GetFrameByIndex, TextPromptBlocker, TextPromptBlockerPreview")
+print("[COMFYUI_PROMPTMODELS] ✅ Nodes registered: GetLastFrame, GetFrameByIndex, TextPromptBlocker, TextPromptBlockerPreview")
