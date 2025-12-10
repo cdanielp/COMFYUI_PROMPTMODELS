@@ -27,4 +27,4 @@ NODE_DISPLAY_NAME_MAPPINGS.update(TEXT_PROMPT_BLOCKER_NAME_MAPPINGS)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
-print("[COMFYUI_PROMPTMODELS] ✅ Nodes registered: GetLastFrame, GetFrameByIndex, TextPromptBlocker, TextPromptBlockerPreview")
+print("[COMFYUI_PROMPTMODELS] ✅ Nodes loaded: GetLastFrame, GetFrameByIndex, TextPromptBlocker, TextPromptBlockerPreview")
