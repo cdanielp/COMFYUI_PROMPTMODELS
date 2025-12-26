@@ -13,75 +13,74 @@ NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 # ============================================================
-#  FUNCIONES DE IMPORTACIÓN
-# ============================================================
-
-def _import_get_last_frame():
-    from .get_last_frame import (
-        NODE_CLASS_MAPPINGS as M1,
-        NODE_DISPLAY_NAME_MAPPINGS as N1,
-    )
-    NODE_CLASS_MAPPINGS.update(M1)
-    NODE_DISPLAY_NAME_MAPPINGS.update(N1)
-
-def _import_text_prompt_blocker():
-    from .text_prompt_blocker import (
-        NODE_CLASS_MAPPINGS as M2,
-        NODE_DISPLAY_NAME_MAPPINGS as N2,
-    )
-    NODE_CLASS_MAPPINGS.update(M2)
-    NODE_DISPLAY_NAME_MAPPINGS.update(N2)
-
-def _import_divisor_prompts():
-    from .DivisorDePrompts import (
-        NODE_CLASS_MAPPINGS as M3,
-        NODE_DISPLAY_NAME_MAPPINGS as N3,
-    )
-    NODE_CLASS_MAPPINGS.update(M3)
-    NODE_DISPLAY_NAME_MAPPINGS.update(N3)
-
-def _import_wjsetgetplus():
-    from .ComfyUI_WJSetGetPlus import (
-        NODE_CLASS_MAPPINGS as M4,
-        NODE_DISPLAY_NAME_MAPPINGS as N4,
-    )
-    NODE_CLASS_MAPPINGS.update(M4)
-    NODE_DISPLAY_NAME_MAPPINGS.update(N4)
-
-def _import_googleai():
-    from .ComfyUI_GoogleAI import (
-        NODE_CLASS_MAPPINGS as M5,
-        NODE_DISPLAY_NAME_MAPPINGS as N5,
-    )
-    NODE_CLASS_MAPPINGS.update(M5)
-    NODE_DISPLAY_NAME_MAPPINGS.update(N5)
-
-# ============================================================
 #  IMPORTACIÓN SEGURA DE MÓDULOS
 # ============================================================
 
-def safe_import(name, func):
-    try:
-        func()
-        print(f"{GREEN}[{name}] ✅ Loaded successfully!{RESET}")
-    except Exception as e:
-        print(f"{RED}[{name}] ⚠️ Failed to load: {e}{RESET}")
+# --- GetLastFrame ---
+try:
+    from .get_last_frame import (
+        NODE_CLASS_MAPPINGS as GET_LAST_FRAME_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as GET_LAST_FRAME_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(GET_LAST_FRAME_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(GET_LAST_FRAME_NAMES)
+    print(f"{GREEN}[GetLastFrame] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[GetLastFrame] ⚠️ Failed: {e}{RESET}")
 
-safe_import("GetLastFrame", _import_get_last_frame)
-safe_import("TextPromptBlocker", _import_text_prompt_blocker)
-safe_import("DivisorDePrompts", _import_divisor_prompts)
-safe_import("WJSetGetPlus", _import_wjsetgetplus)
-safe_import("ComfyUI-GoogleAI", _import_googleai)
+# --- TextPromptBlocker ---
+try:
+    from .text_prompt_blocker import (
+        NODE_CLASS_MAPPINGS as TEXT_PROMPT_BLOCKER_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as TEXT_PROMPT_BLOCKER_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(TEXT_PROMPT_BLOCKER_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(TEXT_PROMPT_BLOCKER_NAMES)
+    print(f"{GREEN}[TextPromptBlocker] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[TextPromptBlocker] ⚠️ Failed: {e}{RESET}")
+
+# --- DivisorDePrompts ---
+try:
+    from .DivisorDePrompts import (
+        NODE_CLASS_MAPPINGS as DIVISOR_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as DIVISOR_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(DIVISOR_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(DIVISOR_NAMES)
+    print(f"{GREEN}[DivisorDePrompts] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[DivisorDePrompts] ⚠️ Failed: {e}{RESET}")
+
+# --- WJSetGetPlus ---
+try:
+    from .ComfyUI_WJSetGetPlus import (
+        NODE_CLASS_MAPPINGS as WJSETGET_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as WJSETGET_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(WJSETGET_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(WJSETGET_NAMES)
+    print(f"{GREEN}[WJSetGetPlus] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[WJSetGetPlus] ⚠️ Failed: {e}{RESET}")
+
+# --- ComfyUI-GoogleAI ---
+try:
+    from .ComfyUI_GoogleAI import (
+        NODE_CLASS_MAPPINGS as GOOGLEAI_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as GOOGLEAI_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(GOOGLEAI_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLEAI_NAMES)
+    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
 # ============================================================
 #  LOG FINAL
 # ============================================================
 
-loaded_nodes = list(NODE_DISPLAY_NAME_MAPPINGS.values())
-print(f"{YELLOW}[PromptModels Studio] 📦 Total nodes loaded: {len(loaded_nodes)}{RESET}")
-for name in loaded_nodes:
-    print(f"   • {name}")
-
-print(f"{GREEN}[PromptModels Studio] ✅ All available nodes are ready in ComfyUI!{RESET}")
+print(f"{YELLOW}[PromptModels Studio] 📦 Total nodes loaded: {len(NODE_CLASS_MAPPINGS)}{RESET}")
+print(f"{GREEN}[PromptModels Studio] ✅ Ready!{RESET}")
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
