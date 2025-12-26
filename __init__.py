@@ -2,7 +2,6 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-# Colores para logs en consola
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
@@ -14,19 +13,9 @@ NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 # ============================================================
-#  Importación segura de módulos
+#  FUNCIONES DE IMPORTACIÓN
 # ============================================================
 
-def safe_import(name, import_func):
-    """Evita que un error en un módulo bloquee los demás."""
-    try:
-        import_func()
-        print(f"{GREEN}[{name}] ✅ Loaded successfully!{RESET}")
-    except Exception as e:
-        print(f"{RED}[{name}] ⚠️ Failed to load: {e}{RESET}")
-
-# --- Get Last Frame ---
-safe_import("GetLastFrame", lambda: _import_get_last_frame())
 def _import_get_last_frame():
     from .get_last_frame import (
         NODE_CLASS_MAPPINGS as M1,
@@ -35,8 +24,6 @@ def _import_get_last_frame():
     NODE_CLASS_MAPPINGS.update(M1)
     NODE_DISPLAY_NAME_MAPPINGS.update(N1)
 
-# --- Text Prompt Blocker ---
-safe_import("TextPromptBlocker", lambda: _import_text_prompt_blocker())
 def _import_text_prompt_blocker():
     from .text_prompt_blocker import (
         NODE_CLASS_MAPPINGS as M2,
@@ -45,8 +32,6 @@ def _import_text_prompt_blocker():
     NODE_CLASS_MAPPINGS.update(M2)
     NODE_DISPLAY_NAME_MAPPINGS.update(N2)
 
-# --- Divisor De Prompts ---
-safe_import("DivisorDePrompts", lambda: _import_divisor_prompts())
 def _import_divisor_prompts():
     from .DivisorDePrompts import (
         NODE_CLASS_MAPPINGS as M3,
@@ -55,8 +40,6 @@ def _import_divisor_prompts():
     NODE_CLASS_MAPPINGS.update(M3)
     NODE_DISPLAY_NAME_MAPPINGS.update(N3)
 
-# --- WJSetGetPlus ---
-safe_import("WJSetGetPlus", lambda: _import_wjsetgetplus())
 def _import_wjsetgetplus():
     from .ComfyUI_WJSetGetPlus import (
         NODE_CLASS_MAPPINGS as M4,
@@ -65,8 +48,6 @@ def _import_wjsetgetplus():
     NODE_CLASS_MAPPINGS.update(M4)
     NODE_DISPLAY_NAME_MAPPINGS.update(N4)
 
-# --- Google AI ---
-safe_import("ComfyUI-GoogleAI", lambda: _import_googleai())
 def _import_googleai():
     from .ComfyUI_GoogleAI import (
         NODE_CLASS_MAPPINGS as M5,
@@ -76,7 +57,24 @@ def _import_googleai():
     NODE_DISPLAY_NAME_MAPPINGS.update(N5)
 
 # ============================================================
-#  Resumen dinámico
+#  IMPORTACIÓN SEGURA DE MÓDULOS
+# ============================================================
+
+def safe_import(name, func):
+    try:
+        func()
+        print(f"{GREEN}[{name}] ✅ Loaded successfully!{RESET}")
+    except Exception as e:
+        print(f"{RED}[{name}] ⚠️ Failed to load: {e}{RESET}")
+
+safe_import("GetLastFrame", _import_get_last_frame)
+safe_import("TextPromptBlocker", _import_text_prompt_blocker)
+safe_import("DivisorDePrompts", _import_divisor_prompts)
+safe_import("WJSetGetPlus", _import_wjsetgetplus)
+safe_import("ComfyUI-GoogleAI", _import_googleai)
+
+# ============================================================
+#  LOG FINAL
 # ============================================================
 
 loaded_nodes = list(NODE_DISPLAY_NAME_MAPPINGS.values())
