@@ -1,0 +1,25 @@
+# __init__.py - ComfyUI_GoogleAI
+# Custom nodes for Google AI (Gemini API) - Text and Image Generation
+# Updated: December 2025
+
+from .google_text_node import (
+    NODE_CLASS_MAPPINGS as GOOGLE_TEXT_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as GOOGLE_TEXT_NAME_MAPPINGS,
+)
+from .google_image_node import (
+    NODE_CLASS_MAPPINGS as GOOGLE_IMAGE_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as GOOGLE_IMAGE_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+
+NODE_CLASS_MAPPINGS.update(GOOGLE_TEXT_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLE_TEXT_NAME_MAPPINGS)
+
+NODE_CLASS_MAPPINGS.update(GOOGLE_IMAGE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLE_IMAGE_NAME_MAPPINGS)
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
+print("[ComfyUI-GoogleAI] ✅ Nodes loaded: GoogleAI_TextNode, GoogleAI_TextNode_Simple, GoogleAI_ImageNode, GoogleAI_ImageNode_Simple")
