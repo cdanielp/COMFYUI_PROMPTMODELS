@@ -185,9 +185,15 @@ class GoogleAI_ImageNode:
             print(f"[GoogleAI] ⚠️ 4K solo disponible con gemini-3-pro-image-preview, usando 2K")
             image_size = "2K"
 
-        # Manejar seed
+        # Manejar seed - Normalizar si excede el límite de 32-bit
+        # (ComfyDeploy puede inyectar seeds de 64-bit que exceden 2147483647)
+        MAX_SEED = 2147483647
+        if seed > MAX_SEED:
+            seed = seed % (MAX_SEED + 1)
+            print(f"[GoogleAI] ⚠️ Seed normalizado de valor excedido a: {seed}")
+        
         if randomize_seed or seed == 0:
-            seed_used = random.randint(1, 2147483647)
+            seed_used = random.randint(1, MAX_SEED)
         else:
             seed_used = seed
 
@@ -302,8 +308,14 @@ class GoogleAI_ImageNode_Simple:
         # Obtener aspect_ratio e image_size del preset
         aspect_ratio, image_size = SIZE_PRESETS.get(size_preset, ("1:1", "1K"))
 
+        # Normalizar seed si excede el límite de 32-bit
+        MAX_SEED = 2147483647
+        if seed > MAX_SEED:
+            seed = seed % (MAX_SEED + 1)
+            print(f"[GoogleAI] ⚠️ Seed normalizado de valor excedido a: {seed}")
+        
         # Seed aleatorio si es 0
-        seed_used = seed if seed != 0 else random.randint(1, 2147483647)
+        seed_used = seed if seed != 0 else random.randint(1, MAX_SEED)
 
         print(f"[GoogleAI] 🎨 Modelo: {model}")
         print(f"[GoogleAI] 📐 Preset: {size_preset}")
