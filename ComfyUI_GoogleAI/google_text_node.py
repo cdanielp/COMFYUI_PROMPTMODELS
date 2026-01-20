@@ -47,11 +47,15 @@ class GoogleAI_TextNode:
                 }),
             },
             "optional": {
-                "images": ("IMAGE",),
+                "custom_model": ("STRING", {"default": "", "multiline": False}),
+                "image_1": ("IMAGE",),
+                "image_2": ("IMAGE",),
+                "image_3": ("IMAGE",),
+                "image_4": ("IMAGE",),
+                "image_5": ("IMAGE",),
                 "audio": ("AUDIO",),
                 "video": ("IMAGE",),
                 "files": ("DOCUMENT",),  # Para PDFs y documentos
-                "custom_model": ("STRING", {"default": "", "multiline": False}),
             }
         }
 
@@ -61,7 +65,9 @@ class GoogleAI_TextNode:
     CATEGORY = "GoogleAI"
 
     def generate_text(self, api_key, prompt, model, seed, randomize_seed, system_prompt, temperature,
-                      images=None, audio=None, video=None, files=None, custom_model=""):
+                      custom_model="",
+                      image_1=None, image_2=None, image_3=None, image_4=None, image_5=None,
+                      audio=None, video=None, files=None):
         
         # Usar modelo personalizado si se proporciona
         active_model = custom_model.strip() if custom_model.strip() else model
@@ -72,28 +78,28 @@ class GoogleAI_TextNode:
         if not prompt.strip():
             return ("❌ Error: Prompt is required",)
 
-        # Manejar seed
+        # Manejar seed - Normalizar si excede el límite de 32-bit
+        # (ComfyDeploy puede inyectar seeds de 64-bit que exceden 2147483647)
+        MAX_SEED = 2147483647
+        if seed > MAX_SEED:
+            seed = seed % (MAX_SEED + 1)
+            print(f"[GoogleAI] ⚠️ Seed normalizado de valor excedido a: {seed}")
+        
         if randomize_seed or seed == 0:
-            seed_used = random.randint(1, 2147483647)
+            seed_used = random.randint(1, MAX_SEED)
         else:
             seed_used = seed
 
-        # Convertir imágenes a base64
+        # Convertir imágenes a base64 (5 entradas individuales)
         image_data = []
-        if images is not None:
-            try:
-                # Si es batch de imágenes
-                if len(images.shape) == 4:
-                    for i in range(images.shape[0]):
-                        b64 = GoogleAICore.tensor_to_base64(images[i:i+1])
-                        image_data.append(b64)
-                        print(f"[GoogleAI] ✅ Imagen {i+1} convertida")
-                else:
-                    b64 = GoogleAICore.tensor_to_base64(images)
+        for idx, img in enumerate([image_1, image_2, image_3, image_4, image_5], 1):
+            if img is not None:
+                try:
+                    b64 = GoogleAICore.tensor_to_base64(img)
                     image_data.append(b64)
-                    print(f"[GoogleAI] ✅ Imagen convertida")
-            except Exception as e:
-                print(f"[GoogleAI] ⚠️ Error convirtiendo imagen: {e}")
+                    print(f"[GoogleAI] ✅ Imagen {idx} convertida")
+                except Exception as e:
+                    print(f"[GoogleAI] ⚠️ Error en imagen {idx}: {e}")
 
         # Convertir audio a base64
         audio_data = []
