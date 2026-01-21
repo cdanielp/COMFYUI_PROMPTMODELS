@@ -1,0 +1,15 @@
+# Titan Suite - Dependencias
+# Compatible con ComfyUI, ComfyDeploy, RunComfy
+# Versiones con límites superiores para evitar incompatibilidades
+
+# Core - Requerido
+safetensors>=0.4.0,<1.0.0
+Pillow>=9.5.0,<11.0.0
+torch>=2.0.0
+
+# Nota: torch normalmente viene preinstalado en ComfyUI
+# No especificamos versión máxima para compatibilidad con diferentes CUDA
+
+# Opcional - Para funcionalidades futuras
+# requests>=2.28.0,<3.0.0  # Descomentar si se añade conexión API
+# numpy>=1.24.0,<2.0.0     # Normalmente ya instalado con torch
