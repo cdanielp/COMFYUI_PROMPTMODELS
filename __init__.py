@@ -87,17 +87,17 @@ try:
 except Exception as e:
     print(f"{RED}[ComfyUI-Grok] ⚠️ Failed: {e}{RESET}")
 
-# --- Titan Suite 🇪🇸 (Maestro, Inspector, MultiLora) ---
+# --- ComfyUI-Baules 📦 (Sistema de Gestión de Assets) ---
 try:
-    from .titan_nodes_comfyui import (
-        NODE_CLASS_MAPPINGS as TITAN_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as TITAN_NAMES,
+    from .ComfyUI_Baules import (
+        NODE_CLASS_MAPPINGS as BAULES_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as BAULES_NAMES,
     )
-    NODE_CLASS_MAPPINGS.update(TITAN_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(TITAN_NAMES)
-    print(f"{GREEN}[Titan Suite 🇪🇸] ✅ Loaded (7 nodes){RESET}")
+    NODE_CLASS_MAPPINGS.update(BAULES_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(BAULES_NAMES)
+    print(f"{GREEN}[ComfyUI-Baules 📦] ✅ Loaded ({len(BAULES_CLASS)} nodes){RESET}")
 except Exception as e:
-    print(f"{RED}[Titan Suite 🇪🇸] ⚠️ Failed: {e}{RESET}")
+    print(f"{RED}[ComfyUI-Baules 📦] ⚠️ Failed: {e}{RESET}")
 
 # ============================================================
 #  LOG FINAL
