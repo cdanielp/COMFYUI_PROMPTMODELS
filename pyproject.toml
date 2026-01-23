@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
 description = "Custom nodes for ComfyUI by PROMPTMODELS."
-version = "1.0.3"
+version = "1.0.2"
 license = {file = "LICENSE"}
 
 [project.urls]
