@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
 description = "Custom nodes for ComfyUI by PROMPTMODELS."
-version = "1.0.2"
+version = "1.0.4"
 license = {file = "LICENSE"}
 
 [project.urls]
@@ -12,5 +12,5 @@ Documentation = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS/wiki"
 [tool.comfy]
 PublisherId = "promptmodelsstudio"
 DisplayName = "COMFYUI_PROMPTMODELS"
-Icon = "Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png""
+Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png"
 Includes = []
