@@ -1,7 +1,0 @@
-# ComfyUI-Baules Dependencies
-
-# Pillow (normalmente ya incluido con ComfyUI)
-# Pillow>=10.0.0
-
-# No requiere dependencias adicionales en instalación estándar de ComfyUI.
-# Si usas un entorno Python mínimo, descomenta Pillow arriba.
