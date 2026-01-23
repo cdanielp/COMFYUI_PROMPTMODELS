@@ -1,8 +1,10 @@
 [project]
-name = "promptmodels"
+name = "comfyui-promptmodelsstudio"
 description = "Custom nodes for ComfyUI by PROMPTMODELS."
-version = "1.0.4"
-license = {file = "LICENSE"}
+version = "1.0.5"
+license = { file = "LICENSE" }
+readme = "README.md"
+authors = [{ name = "PROMPTMODELS Studio" }]
 
 [project.urls]
 Repository = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS"
@@ -13,4 +15,13 @@ Documentation = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS/wiki"
 PublisherId = "promptmodelsstudio"
 DisplayName = "COMFYUI_PROMPTMODELS"
 Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png"
-Includes = []
+Includes = [
+  "__init__.py",
+  "ComfyUI_Baules",
+  "ComfyUI_GoogleAI",
+  "ComfyUI_Grok",
+  "ComfyUI_WJSetGetPlus",
+  "DivisorDePrompts",
+  "get_last_frame",
+  "text_prompt_blocker"
+]
