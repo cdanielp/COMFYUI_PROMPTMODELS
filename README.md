@@ -4,7 +4,7 @@
 
 # 🎨 COMFYUI_PROMPTMODELS
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom%20Nodes-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-purple.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)
@@ -53,6 +53,10 @@ Reinicia ComfyUI.
 | **DivisorDePrompts** | ✂️ Texto | Divide texto en hasta 10 prompts |
 | **Get Last Frame** | 🎬 Video | Extrae frames de secuencias |
 | **Text Prompt Blocker** | 🛡️ Seguridad | Filtro de palabras prohibidas |
+| **Selector de imágenes** | 🎛️ Selectores Pro | Combina múltiples imágenes+máscaras en batch |
+| **Selector de Prompts** | 🎛️ Selectores Pro | Combina múltiples prompts con separadores |
+| **Imagen latente Pro** | 🎛️ Selectores Pro | Genera latents con presets de tamaño |
+| **Prompt Pro** | 🎛️ Selectores Pro | Constructor de prompts por campos |
 
 ---
 
@@ -94,6 +98,117 @@ Sistema de memoria de contexto. **100% compatible** con workflows que usan SetNo
 
 ---
 
+### 🎛️ Selectores Pro
+
+Suite de nodos para selección múltiple, generación de latents y construcción de prompts profesionales.
+
+#### Selector de imágenes
+
+Selecciona y combina hasta 12 slots de imagen + máscara.
+
+| Entrada | Opciones |
+|---------|----------|
+| `fallback` | `error` \| `slot1` |
+| `mode` | `auto` \| `single_only` \| `batch_only` |
+| `img1..img12` | IMAGE |
+| `mask1..mask12` | MASK |
+| `on1..on12` | BOOLEAN |
+
+**Salidas:** `image` (IMAGE), `mask` (MASK)
+
+**Comportamiento:**
+- 1 slot activo → salida single
+- 2+ slots activos → salida batch concatenado
+- Valida que todas las imágenes tengan el mismo tamaño
+
+---
+
+#### Selector de Prompts
+
+Selecciona y combina hasta 12 prompts de texto.
+
+| Entrada | Opciones |
+|---------|----------|
+| `fallback` | `error` \| `p1` |
+| `join_with` | `\n\n` \| `\n` \| `\|` \| `,` |
+| `mode` | `auto` \| `single_only` \| `join_only` |
+| `p1..p12` | STRING (multiline) |
+| `on1..on12` | BOOLEAN |
+
+**Salidas:** `text` (STRING)
+
+---
+
+#### Imagen latente Pro
+
+Genera un latent vacío con presets predefinidos. **Un solo dropdown, sin cálculos.**
+
+| Entrada | Opciones |
+|---------|----------|
+| `size_preset` | 29 presets (Test, Medio, Grande, Social) |
+| `batch_size` | INT (1-64) |
+| `rounding` | `auto_round` \| `strict` |
+
+**Salidas:** `latent` (LATENT)
+
+**Presets incluidos:**
+
+| Categoría | Ratios disponibles |
+|-----------|-------------------|
+| **Test** (256 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
+| **Medio** (512 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
+| **Grande** (1024 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
+| **Social** | 720×1280 (9:16), 1280×720 (16:9) |
+
+---
+
+#### Prompt Pro
+
+Constructor de prompts por campos con 10 diseños predefinidos. Solo requiere **👤 Sujeto**, todo lo demás es opcional.
+
+**Diseños disponibles:**
+- Retrato Pro
+- Cinemático
+- Producto E-commerce
+- Anime Clean
+- Concept Art
+- Arquitectura
+- Moda Editorial
+- Interior Design
+- Vertical Reels (9:16)
+- Thumbnail YouTube (16:9)
+
+**Campos disponibles:**
+
+| Campo | Emoji | Obligatorio |
+|-------|-------|-------------|
+| Sujeto | 👤 | ✅ Sí |
+| Acción / Pose | 🧍 | No |
+| Emoción / Expresión | 🎭 | No |
+| Vestuario / Props | 👗 | No |
+| Fondo / Entorno | 🏞️ | No |
+| Estilo | 🎨 | No |
+| Paleta / Colores | 🎨 | No |
+| Iluminación | 💡 | No |
+| Cámara / Lente | 📷 | No |
+| Materiales / Texturas | 🧪 | No |
+| Composición | 🧷 | No |
+| Detalle | 🔎 | No |
+| Atmósfera | 🌫️ | No |
+| Calidad | ✨ | No |
+| Restricciones | 🧯 | No |
+| Extra | ➕ | No |
+
+**Opciones globales:**
+- `🔗 Separador`: `, ` | ` ` | `\n` | ` | `
+- `📌 Prefijo` / `📌 Sufijo`: Texto adicional
+- `🧹 Normalizar`: Limpia espacios y comas duplicadas
+- `🧼 Evitar duplicados`: Elimina frases repetidas
+
+**Salidas:** `text` (STRING)
+
+---
+
 ### ✂️ DivisorDePrompts
 
 Divide texto multilínea en hasta 10 prompts independientes usando párrafos como separador.
@@ -124,6 +239,8 @@ Nodo de seguridad que analiza y filtra prompts con palabras prohibidas.
 |------|-----------|-------------|
 | Google AI | Google | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | Grok | xAI | [console.x.ai](https://console.x.ai/) |
+
+> **Nota:** Los nodos de Selectores Pro no requieren API keys.
 
 ---
 
