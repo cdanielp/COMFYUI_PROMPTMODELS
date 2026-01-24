@@ -87,17 +87,17 @@ try:
 except Exception as e:
     print(f"{RED}[ComfyUI-Grok] ⚠️ Failed: {e}{RESET}")
 
-# --- ComfyUI-Baules 📦 (Sistema de Gestión de Assets) ---
+# --- comfyui_selectores_pro (NUEVO) ---
 try:
-    from .ComfyUI_Baules import (
-        NODE_CLASS_MAPPINGS as BAULES_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as BAULES_NAMES,
+    from .comfyui_selectores_pro import (
+        NODE_CLASS_MAPPINGS as SELECTORES_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as SELECTORES_NAMES,
     )
-    NODE_CLASS_MAPPINGS.update(BAULES_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(BAULES_NAMES)
-    print(f"{GREEN}[ComfyUI-Baules 📦] ✅ Loaded ({len(BAULES_CLASS)} nodes){RESET}")
+    NODE_CLASS_MAPPINGS.update(SELECTORES_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(SELECTORES_NAMES)
+    print(f"{GREEN}[Selectores Pro] ✅ Loaded{RESET}")
 except Exception as e:
-    print(f"{RED}[ComfyUI-Baules 📦] ⚠️ Failed: {e}{RESET}")
+    print(f"{RED}[Selectores Pro] ⚠️ Failed: {e}{RESET}")
 
 # ============================================================
 #  LOG FINAL
