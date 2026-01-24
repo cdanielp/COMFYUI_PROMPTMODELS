@@ -17,11 +17,11 @@ DisplayName = "COMFYUI_PROMPTMODELS"
 Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png"
 Includes = [
   "__init__.py",
-  "ComfyUI_Baules",
   "ComfyUI_GoogleAI",
   "ComfyUI_Grok",
   "ComfyUI_WJSetGetPlus",
   "DivisorDePrompts",
   "get_last_frame",
-  "text_prompt_blocker"
+  "text_prompt_blocker",
+  "comfyui_selectores_pro"
 ]
