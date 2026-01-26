@@ -1,6 +1,10 @@
 # ============================================================
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
+
+__version__ = "1.0.0"
+__author__ = "Prompt Models Studio"
+
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
@@ -51,8 +55,7 @@ try:
 except Exception as e:
     print(f"{RED}[DivisorDePrompts] ⚠️ Failed: {e}{RESET}")
 
-# --- GETSETNODE_PRO (Antes WJSetGetPlus) ---
-# Actualizado para evitar conflictos con Kijai/Rgthree
+# --- GETSETNODE_PRO ---
 try:
     from .GETSETNODE_PRO import (
         NODE_CLASS_MAPPINGS as PRO_SETGET_CLASS,
