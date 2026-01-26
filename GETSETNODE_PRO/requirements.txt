@@ -1,0 +1,8 @@
+# Dependencias para ComfyUI_WJSetGetPlus
+# torch viene incluido con ComfyUI
+
+# Opcional: para soporte completo de GGUF
+gguf>=0.6.0
+
+# Opcional: para archivos safetensors (normalmente ya instalado)
+safetensors>=0.4.0
