@@ -12,7 +12,7 @@ NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 # ============================================================
-#  IMPORTACIÓN SEGURA DE MÓDULOS
+#  IMPORTACIÓN DE MÓDULOS
 # ============================================================
 
 # --- GetLastFrame ---
@@ -51,17 +51,18 @@ try:
 except Exception as e:
     print(f"{RED}[DivisorDePrompts] ⚠️ Failed: {e}{RESET}")
 
-# --- WJSetGetPlus ---
+# --- GETSETNODE_PRO (Antes WJSetGetPlus) ---
+# Actualizado para evitar conflictos con Kijai/Rgthree
 try:
-    from .ComfyUI_WJSetGetPlus import (
-        NODE_CLASS_MAPPINGS as WJSETGET_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as WJSETGET_NAMES,
+    from .GETSETNODE_PRO import (
+        NODE_CLASS_MAPPINGS as PRO_SETGET_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as PRO_SETGET_NAMES,
     )
-    NODE_CLASS_MAPPINGS.update(WJSETGET_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(WJSETGET_NAMES)
-    print(f"{GREEN}[WJSetGetPlus] ✅ Loaded{RESET}")
+    NODE_CLASS_MAPPINGS.update(PRO_SETGET_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(PRO_SETGET_NAMES)
+    print(f"{GREEN}[GETSETNODE_PRO] ✅ Loaded{RESET}")
 except Exception as e:
-    print(f"{RED}[WJSetGetPlus] ⚠️ Failed: {e}{RESET}")
+    print(f"{RED}[GETSETNODE_PRO] ⚠️ Failed: {e}{RESET}")
 
 # --- ComfyUI-GoogleAI ---
 try:
@@ -87,7 +88,7 @@ try:
 except Exception as e:
     print(f"{RED}[ComfyUI-Grok] ⚠️ Failed: {e}{RESET}")
 
-# --- comfyui_selectores_pro (NUEVO) ---
+# --- comfyui_selectores_pro ---
 try:
     from .comfyui_selectores_pro import (
         NODE_CLASS_MAPPINGS as SELECTORES_CLASS,
