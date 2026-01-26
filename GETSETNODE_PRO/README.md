@@ -187,6 +187,16 @@ GETSETNODE_PRO/
 └── README.md
 ```
 
+## ⚠️ IMPORTANT UPDATE (v1.0.6+) - MIGRATION GUIDE
+
+**We have renamed our nodes to fix conflicts with other packs.**
+
+If you updated from an older version and your nodes are **RED**, don't panic!
+* **Old Name:** `Set Node` / `Get Node`
+* **New Name:** `PRO Set Node` / `PRO Get Node`
+
+**Solution:** Simply delete the red nodes in your workflow and replace them with the new `PRO` versions from the menu.
+
 ## 📄 Licencia
 
 MIT License
