@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
-description = "Custom nodes for ComfyUI by PROMPTMODELS."
-version = "1.0.5"
+description = "Custom nodes for ComfyUI by PROMPTMODELS. Includes Google Gemini, Grok, Logic Utils, and Conflict-Free Set/Get Nodes."
+version = "1.0.6"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
@@ -13,13 +13,14 @@ Documentation = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS/wiki"
 
 [tool.comfy]
 PublisherId = "promptmodelsstudio"
-DisplayName = "COMFYUI_PROMPTMODELS"
+DisplayName = "PromptModels Studio"
 Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png"
 Includes = [
   "__init__.py",
+  "requirements.txt",
   "ComfyUI_GoogleAI",
   "ComfyUI_Grok",
-  "ComfyUI_WJSetGetPlus",
+  "GETSETNODE_PRO",
   "DivisorDePrompts",
   "get_last_frame",
   "text_prompt_blocker",
