@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.2.1"  # Incrementado por la nueva integración
+__version__ = "1.2.2"
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
@@ -67,7 +67,9 @@ try:
 except Exception as e:
     print(f"{RED}[GETSETNODE_PRO] ⚠️ Failed: {e}{RESET}")
 
-# --- ComfyUI-GoogleAI ---
+# --- ComfyUI-GoogleAI (V2.0.1) ---
+# Audio (Lyria) removido — lyria-3 sin API pública (Feb 2026)
+# Modelos actualizados: Imagen 4, Veo 3.1, Gemini 3.1 Pro
 try:
     from .ComfyUI_GoogleAI import (
         NODE_CLASS_MAPPINGS as GOOGLEAI_CLASS,
@@ -75,7 +77,7 @@ try:
     )
     NODE_CLASS_MAPPINGS.update(GOOGLEAI_CLASS)
     NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLEAI_NAMES)
-    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded (V2.1){RESET}")
+    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded (V2.0.1 — Texto/Imagen4/Veo3.1/Diagnóstico){RESET}")
 except Exception as e:
     print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
@@ -109,7 +111,7 @@ except Exception as e:
 print(f"{YELLOW}[PromptModels Studio] 📦 Total nodes loaded: {len(NODE_CLASS_MAPPINGS)}{RESET}")
 print(f"{GREEN}[PromptModels Studio] ✅ Ready!{RESET}")
 
-# 🔥 AGREGADO: Ruta al frontend para que ComfyUI cargue la UI y la API Key global
+# Ruta al frontend para que ComfyUI cargue la UI y la API Key global de GoogleAI
 WEB_DIRECTORY = "./ComfyUI_GoogleAI/web"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
