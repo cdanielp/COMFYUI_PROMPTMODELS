@@ -79,18 +79,17 @@ try:
 except Exception as e:
     print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
-# --- ComfyUI-Grok (xAI) ---
-# Se encarga de cargar los sub-nodos (grok_text_node y grok_image_node)
+# --- ComfyUI-GrokAI (xAI) ---
 try:
-    from .ComfyUI_Grok import (
+    from .ComfyUI_GrokAI import (
         NODE_CLASS_MAPPINGS as GROK_CLASS,
         NODE_DISPLAY_NAME_MAPPINGS as GROK_NAMES,
     )
     NODE_CLASS_MAPPINGS.update(GROK_CLASS)
     NODE_DISPLAY_NAME_MAPPINGS.update(GROK_NAMES)
-    print(f"{GREEN}[ComfyUI-Grok] ✅ Loaded (xAI Integration){RESET}")
+    print(f"{GREEN}[ComfyUI-GrokAI] ✅ Loaded (xAI Integration){RESET}")
 except Exception as e:
-    print(f"{RED}[ComfyUI-Grok] ⚠️ Failed: {e}{RESET}")
+    print(f"{RED}[ComfyUI-GrokAI] ⚠️ Failed: {e}{RESET}")
 
 # --- comfyui_selectores_pro ---
 try:
