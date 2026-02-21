@@ -1,422 +1,519 @@
 """
-grok_core.py - Motor Central de la API de xAI / Grok (V1.0)
-=============================================================
-Maneja TODAS las comunicaciones HTTP con la API REST de xAI.
-Regla de Oro: CERO SDKs. Solo requests HTTP puras.
+grok_core.py — Motor Central Multimodal para ComfyUI_Grok
+=========================================================
+Responsabilidades:
+  - Conversión eficiente de tensores PyTorch → Base64
+  - Construcción de payloads multimodales (texto + imágenes)
+  - Enrutamiento automático al endpoint correcto (chat / imagen / video)
+  - Reintentos con backoff exponencial y manejo de rate-limiting
 
-Autor: Prompt Models Studio | cdanielp
+Autor: Prompt Models Studio — xAI Integration Layer v2.0
 """
 
-import requests
-import base64
-import json
 import io
-import os
+import base64
+import time
 import logging
-from typing import Optional, Dict, Any, List
-
-import torch
+import requests
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+import torch
+from PIL import Image
+from typing import Optional, Union
 
-logger = logging.getLogger("ComfyUI_GrokAI")
+log = logging.getLogger("ComfyUI_Grok")
 
-# ============================================================================
-# CONSTANTES DE LA API
-# ============================================================================
-XAI_BASE_URL = "https://api.x.ai/v1"
-XAI_CHAT_ENDPOINT = f"{XAI_BASE_URL}/chat/completions"
-XAI_IMAGE_GEN_ENDPOINT = f"{XAI_BASE_URL}/images/generations"
-XAI_IMAGE_EDIT_ENDPOINT = f"{XAI_BASE_URL}/images/edits"
+# ──────────────────────────────────────────────
+# CONSTANTES GLOBALES
+# ──────────────────────────────────────────────
+XAI_BASE_URL        = "https://api.x.ai/v1"
+CHAT_ENDPOINT       = f"{XAI_BASE_URL}/chat/completions"
+IMAGE_ENDPOINT      = f"{XAI_BASE_URL}/images/generations"
+VIDEO_ENDPOINT      = f"{XAI_BASE_URL}/video/generations"
 
-# Modelos disponibles
-TEXT_MODELS = [
-    "grok-4.1-fast-reasoning",
-    "grok-4.1-fast-non-reasoning",
-    "grok-3-mini",
-    "grok-code-fast-1",
-]
+DEFAULT_CHAT_MODEL  = "grok-4"
+DEFAULT_IMAGE_MODEL = "grok-2-image"
+DEFAULT_VIDEO_MODEL = "grok-video-forge"
 
-IMAGE_MODELS = [
-    "grok-2-image-1212",
-    "grok-2-image",
-]
-
-# System Prompts hardcoded
-SYSTEM_PROMPT_WORKFLOW_DEBUGGER = (
-    "Eres un ingeniero experto en ComfyUI y PyTorch. Analiza las keys "
-    "'class_type' de este JSON de workflow. Enumera el repositorio exacto "
-    "de GitHub para instalar cada custom node. Advierte sobre nodos con "
-    "múltiples forks conflictivos. Da pasos de solución concretos."
-)
-
-SYSTEM_PROMPT_WORKFLOW_DEBUGGER_FUN = (
-    "Eres un ingeniero experto en ComfyUI con un humor sarcástico e irónico "
-    "nivel maestro. Analiza este workflow con todo el sarcasmo que puedas, "
-    "pero SIEMPRE da la solución real al final. Haz observaciones graciosas "
-    "sobre las decisiones del usuario, pero sé útil. Responde en español."
-)
-
-SYSTEM_PROMPT_METADATA_READER = (
-    "Eres un experto en modelos de difusión. Analiza estos keys y metadata "
-    "de un archivo .safetensors. Determina: 1) La arquitectura exacta "
-    "(Flux, SDXL, SD 1.5, SD 3, Pony, etc.) 2) Si tiene trigger words "
-    "en ss_tag_frequency, extráelas en una cadena limpia. Responde en español."
-)
-
-SYSTEM_PROMPT_JSON_FORMATTER = (
-    "Eres un asistente que SOLO responde en JSON válido. No incluyas markdown, "
-    "explicaciones ni texto fuera del JSON. Tu respuesta debe ser parseable "
-    "directamente con json.loads()."
-)
+MAX_RETRIES         = 4
+RETRY_BASE_DELAY    = 2.0   # segundos — se duplica en cada intento
+CHAT_TIMEOUT        = 120   # segundos
+VIDEO_TIMEOUT       = 300   # video tarda mucho más
 
 
-class GrokCore:
+# ──────────────────────────────────────────────
+# CONVERSIÓN DE TENSORES
+# ──────────────────────────────────────────────
+
+def tensor_to_pil(tensor: torch.Tensor, batch_index: int = 0) -> Image.Image:
     """
-    Motor central para la API de xAI (Grok).
-    CERO SDKs — Solo requests HTTP puras.
+    Convierte un tensor ComfyUI [B, H, W, C] float32 (0.0–1.0)
+    al objeto PIL Image correspondiente al frame `batch_index`.
+    """
+    if tensor.ndim == 4:
+        frame = tensor[batch_index]          # [H, W, C]
+    elif tensor.ndim == 3:
+        frame = tensor
+    else:
+        raise ValueError(f"Tensor con forma inesperada: {tensor.shape}")
+
+    # Desnormalizar → uint8 y convertir a PIL
+    np_img = (frame.cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+    return Image.fromarray(np_img, mode="RGB")
+
+
+def tensor_to_base64(
+    tensor: torch.Tensor,
+    batch_index: int = 0,
+    format: str = "JPEG",
+    quality: int = 88
+) -> str:
+    """
+    Convierte un tensor ComfyUI a string Base64 listo para la API de xAI.
+    Usa JPEG por defecto para minimizar la latencia de subida.
+
+    Args:
+        tensor      : Tensor [B, H, W, C] o [H, W, C]
+        batch_index : Frame a extraer cuando hay múltiples en el batch
+        format      : "JPEG" (más liviano) o "PNG" (sin pérdida)
+        quality     : Calidad JPEG 1–95
+
+    Returns:
+        String Base64 sin el prefijo data:image/...
+    """
+    pil_img = tensor_to_pil(tensor, batch_index)
+
+    # Convertir a RGB para evitar problemas con RGBA en JPEG
+    if pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
+
+    buffer = io.BytesIO()
+    save_kwargs = {"format": format}
+    if format == "JPEG":
+        save_kwargs["quality"] = quality
+        save_kwargs["optimize"] = True
+
+    pil_img.save(buffer, **save_kwargs)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def pil_to_tensor(pil_img: Image.Image) -> torch.Tensor:
+    """
+    Convierte PIL Image → tensor ComfyUI [1, H, W, C] float32 (0.0–1.0).
+    """
+    if pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
+    np_img = np.array(pil_img).astype(np.float32) / 255.0
+    return torch.from_numpy(np_img).unsqueeze(0)   # [1, H, W, C]
+
+
+def bytes_to_tensor(raw_bytes: bytes) -> torch.Tensor:
+    """
+    Convierte bytes de imagen (PNG/JPEG) a tensor ComfyUI.
+    Útil para procesar respuestas de la API que devuelven imágenes binarias.
+    """
+    pil_img = Image.open(io.BytesIO(raw_bytes))
+    return pil_to_tensor(pil_img)
+
+
+def sample_video_frames(
+    tensor: torch.Tensor,
+    max_frames: int = 8,
+    strategy: str = "uniform"
+) -> list[torch.Tensor]:
+    """
+    Muestreo inteligente de frames de un tensor de video [B, H, W, C].
+    Evita saturar el límite de tokens/imágenes de la API de xAI.
+
+    Args:
+        tensor    : Tensor de video completo
+        max_frames: Máximo de frames a seleccionar
+        strategy  : "uniform" (distribuido) o "keyframe" (cada N frames)
+
+    Returns:
+        Lista de tensores individuales [1, H, W, C]
+    """
+    total = tensor.shape[0]
+    if total <= max_frames:
+        return [tensor[i].unsqueeze(0) for i in range(total)]
+
+    if strategy == "uniform":
+        indices = np.linspace(0, total - 1, max_frames, dtype=int)
+    else:  # keyframe — cada N frames
+        step = max(1, total // max_frames)
+        indices = list(range(0, total, step))[:max_frames]
+
+    return [tensor[i].unsqueeze(0) for i in indices]
+
+
+# ──────────────────────────────────────────────
+# CONSTRUCCIÓN DE PAYLOADS
+# ──────────────────────────────────────────────
+
+def build_text_content(text: str) -> list[dict]:
+    """Bloque de contenido tipo texto para mensajes multimodales."""
+    return [{"type": "text", "text": text}]
+
+
+def build_image_content(
+    tensor: torch.Tensor,
+    batch_index: int = 0,
+    detail: str = "high"
+) -> dict:
+    """
+    Construye un bloque image_url a partir de un tensor ComfyUI.
+    `detail` puede ser "low", "high" o "auto" según la API de xAI.
+    """
+    b64 = tensor_to_base64(tensor, batch_index)
+    return {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:image/jpeg;base64,{b64}",
+            "detail": detail
+        }
+    }
+
+
+def build_multimodal_message(
+    role: str,
+    text: str,
+    image_tensors: Optional[list[torch.Tensor]] = None,
+    image_detail: str = "high"
+) -> dict:
+    """
+    Ensambla un mensaje completo con bloques de texto e imágenes mezclados.
+
+    Args:
+        role          : "user" o "system"
+        text          : Texto principal del mensaje
+        image_tensors : Lista de tensores [B, H, W, C] (uno por imagen)
+        image_detail  : Nivel de detalle para visión
+
+    Returns:
+        Diccionario de mensaje listo para incluir en `messages[]`
+    """
+    content = build_text_content(text)
+
+    if image_tensors:
+        for t in image_tensors:
+            if t is not None:
+                content.append(build_image_content(t, detail=image_detail))
+
+    return {"role": role, "content": content}
+
+
+# ──────────────────────────────────────────────
+# ENRUTADOR DE PAYLOAD (PAYLOAD ROUTER)
+# ──────────────────────────────────────────────
+
+class PayloadRouter:
+    """
+    Enrutador central que decide qué endpoint usar y construye
+    el JSON correcto según el tipo de petición.
+
+    Modos soportados:
+      - "chat"   → CHAT_ENDPOINT  (texto y/o visión multimodal)
+      - "image"  → IMAGE_ENDPOINT (generación / edición de imágenes)
+      - "video"  → VIDEO_ENDPOINT (generación / edición de video)
     """
 
-    # ========================================================================
-    # RESOLUCIÓN DE API KEY
-    # ========================================================================
-    @staticmethod
-    def resolve_api_key(node_key: str = "") -> str:
-        """
-        Busca la API Key en orden estricto:
-        1. Campo api_key del nodo
-        2. Variable de entorno XAI_API_KEY
-        3. ValueError si no hay nada
-        """
-        if node_key and node_key.strip():
-            return node_key.strip()
-
-        env_key = os.environ.get("XAI_API_KEY", "").strip()
-        if env_key:
-            return env_key
-
-        raise ValueError(
-            "❌ API Key de xAI no encontrada. Configúrala en:\n"
-            "  1. El campo 'api_key' del nodo, O\n"
-            "  2. La variable de entorno XAI_API_KEY"
-        )
-
-    # ========================================================================
-    # HEADERS COMUNES
-    # ========================================================================
-    @staticmethod
-    def _headers(api_key: str) -> Dict[str, str]:
-        return {
-            "Content-Type": "application/json",
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.headers = {
             "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
         }
 
-    # ========================================================================
-    # CHAT COMPLETIONS (Texto + Visión)
-    # ========================================================================
-    @staticmethod
-    def chat_completion(
-        api_key: str,
-        messages: List[Dict],
-        model: str = "grok-4.1-fast-reasoning",
-        reasoning_effort: Optional[str] = None,
-        response_format: Optional[Dict] = None,
+    # ── Construcción de payloads ──────────────
+
+    def build_chat_payload(
+        self,
+        messages: list[dict],
+        model: str = DEFAULT_CHAT_MODEL,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
-        timeout: int = 120,
-    ) -> Dict[str, Any]:
-        """
-        POST /v1/chat/completions
-        Retorna el JSON de respuesta completo.
-        """
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-        # Reasoning effort: solo enviar si no es "Off"
-        if reasoning_effort and reasoning_effort != "Off":
-            payload["reasoning_effort"] = reasoning_effort.lower()
-
-        # Structured outputs (JSON mode)
-        if response_format:
-            payload["response_format"] = response_format
-
-        try:
-            response = requests.post(
-                XAI_CHAT_ENDPOINT,
-                headers=GrokCore._headers(api_key),
-                json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "N/A"
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = e.response.text[:500] if e.response else str(e)
-            raise RuntimeError(f"Error HTTP {status} de xAI:\n{body}") from e
-
-        except requests.exceptions.Timeout:
-            raise RuntimeError(
-                f"Timeout ({timeout}s) al contactar la API de xAI."
-            )
-        except requests.exceptions.ConnectionError:
-            raise RuntimeError(
-                "No se pudo conectar a la API de xAI. Verifica tu conexión."
-            )
-
-    @staticmethod
-    def chat_text(
-        api_key: str,
-        prompt: str,
-        model: str = "grok-4.1-fast-reasoning",
-        system_prompt: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
-        extra_content: Optional[List[Dict]] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> str:
-        """
-        Llamada simplificada: retorna solo el texto de la respuesta.
-        extra_content permite inyectar imágenes en el array content del user.
-        """
-        messages = []
-
+        max_tokens: int = 2048,
+        system_prompt: str = ""
+    ) -> dict:
+        """Payload para el endpoint de chat/completions."""
+        all_messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
 
-        # Construir content del user
-        if extra_content:
-            user_content = list(extra_content)
-            user_content.append({"type": "text", "text": prompt})
-            messages.append({"role": "user", "content": user_content})
-        else:
-            messages.append({"role": "user", "content": prompt})
+        return {
+            "model": model,
+            "messages": all_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
 
-        result = GrokCore.chat_completion(
-            api_key=api_key,
-            messages=messages,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-        return GrokCore.extract_text(result)
-
-    @staticmethod
-    def extract_text(response: Dict) -> str:
-        """Extrae el texto de la respuesta de chat completions."""
-        try:
-            choices = response.get("choices", [])
-            if not choices:
-                return "[Sin respuesta del modelo]"
-            return choices[0].get("message", {}).get("content", "[Respuesta vacía]")
-        except (KeyError, IndexError, TypeError) as e:
-            logger.error(f"Error extrayendo texto: {e}")
-            return f"[Error al parsear respuesta: {str(e)}]"
-
-    # ========================================================================
-    # GENERACIÓN DE IMAGEN
-    # ========================================================================
-    @staticmethod
-    def generate_image(
-        api_key: str,
+    def build_image_generation_payload(
+        self,
         prompt: str,
-        model: str = "grok-2-image-1212",
+        model: str = DEFAULT_IMAGE_MODEL,
         n: int = 1,
         size: str = "1024x1024",
-        timeout: int = 120,
-    ) -> List[str]:
+        response_format: str = "b64_json",
+        reference_image_b64: Optional[str] = None,
+        mask_b64: Optional[str] = None,
+        strength: float = 0.8
+    ) -> dict:
         """
-        POST /v1/images/generations
-        Retorna lista de strings base64 de las imágenes generadas.
+        Payload para generación de imágenes.
+        Si se provee reference_image_b64, entra en modo image-to-image/inpainting.
         """
         payload = {
             "model": model,
             "prompt": prompt,
             "n": n,
             "size": size,
-            "response_format": "b64_json",
+            "response_format": response_format
         }
+        if reference_image_b64:
+            payload["image"] = reference_image_b64
+            payload["strength"] = round(float(strength), 2)
+        if mask_b64:
+            payload["mask"] = mask_b64
 
-        try:
-            response = requests.post(
-                XAI_IMAGE_GEN_ENDPOINT,
-                headers=GrokCore._headers(api_key),
-                json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
+        return payload
 
-            images_b64 = []
-            for item in data.get("data", []):
-                b64 = item.get("b64_json", "")
-                if b64:
-                    images_b64.append(b64)
-
-            return images_b64
-
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "N/A"
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = e.response.text[:500] if e.response else str(e)
-            raise RuntimeError(f"Error HTTP {status} al generar imagen: {body}")
-
-    # ========================================================================
-    # EDICIÓN DE IMAGEN
-    # ========================================================================
-    @staticmethod
-    def edit_image(
-        api_key: str,
-        image_b64: str,
+    def build_video_payload(
+        self,
         prompt: str,
-        model: str = "grok-2-image-1212",
-        n: int = 1,
-        timeout: int = 120,
-    ) -> List[str]:
-        """
-        POST /v1/images/edits
-        Envía la imagen como archivo multipart.
-        Retorna lista de strings base64.
-        """
-        image_bytes = base64.b64decode(image_b64)
-
-        try:
-            response = requests.post(
-                XAI_IMAGE_EDIT_ENDPOINT,
-                headers={"Authorization": f"Bearer {api_key}"},
-                files={"image": ("image.png", image_bytes, "image/png")},
-                data={
-                    "model": model,
-                    "prompt": prompt,
-                    "n": str(n),
-                    "response_format": "b64_json",
-                },
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            images_b64 = []
-            for item in data.get("data", []):
-                b64 = item.get("b64_json", "")
-                if b64:
-                    images_b64.append(b64)
-
-            return images_b64
-
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "N/A"
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = e.response.text[:500] if e.response else str(e)
-            raise RuntimeError(f"Error HTTP {status} al editar imagen: {body}")
-
-    # ========================================================================
-    # CONVERSIÓN DE TENSORES (ComfyUI ↔ Base64)
-    # ========================================================================
-    @staticmethod
-    def tensor_to_base64(tensor: torch.Tensor, index: int = 0) -> str:
-        """Convierte tensor [B, H, W, C] float 0-1 a base64 PNG."""
-        if tensor.dim() == 4:
-            img_tensor = tensor[index]
-        elif tensor.dim() == 3:
-            img_tensor = tensor
-        else:
-            raise ValueError(f"Tensor con forma inesperada: {tensor.shape}")
-
-        img_np = (img_tensor.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
-        img = Image.fromarray(img_np, "RGB")
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-    @staticmethod
-    def base64_to_tensor(b64_string: str) -> torch.Tensor:
-        """Decodifica base64 a tensor [1, H, W, C] float 0.0-1.0."""
-        img_bytes = base64.b64decode(b64_string)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        img_np = np.array(img).astype(np.float32) / 255.0
-        return torch.from_numpy(img_np).unsqueeze(0)
-
-    # ========================================================================
-    # ANTI-CRASH: Imagen Roja de Error
-    # ========================================================================
-    @staticmethod
-    def create_error_image(error_msg: str, width: int = 512, height: int = 512) -> torch.Tensor:
-        """
-        Crea tensor de imagen roja 512x512 con texto de error.
-        Usado para HTTP 400 (safety/NSFW) o 429 (rate limit) sin crashear.
-        Retorna [1, H, W, C] float 0.0-1.0.
-        """
-        img = Image.new("RGB", (width, height), color=(180, 30, 30))
-        draw = ImageDraw.Draw(img)
-
-        try:
-            font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16
-            )
-        except (IOError, OSError):
-            try:
-                font = ImageFont.truetype("arial.ttf", 16)
-            except (IOError, OSError):
-                font = ImageFont.load_default()
-
-        margin = 20
-        max_w = width - (margin * 2)
-        lines = ["⚠️ GROK API ERROR", "=" * 28, ""]
-        current = ""
-
-        for word in error_msg.split():
-            test = f"{current} {word}".strip()
-            try:
-                bbox = draw.textbbox((0, 0), test, font=font)
-                lw = bbox[2] - bbox[0]
-            except AttributeError:
-                lw = len(test) * 8
-            if lw <= max_w:
-                current = test
-            else:
-                lines.append(current)
-                current = word
-        if current:
-            lines.append(current)
-
-        y = margin
-        for line in lines:
-            draw.text((margin, y), line, fill=(255, 255, 255), font=font)
-            y += 22
-            if y > height - margin:
-                break
-
-        img_np = np.array(img).astype(np.float32) / 255.0
-        return torch.from_numpy(img_np).unsqueeze(0)
-
-    # ========================================================================
-    # UTILIDAD: Aspect Ratio → Size string
-    # ========================================================================
-    @staticmethod
-    def aspect_ratio_to_size(ratio: str) -> str:
-        """Convierte aspect ratio a tamaño de imagen para la API."""
-        mapping = {
-            "1:1": "1024x1024",
-            "16:9": "1344x768",
-            "9:16": "768x1344",
-            "4:3": "1152x896",
-            "3:4": "896x1152",
+        model: str = DEFAULT_VIDEO_MODEL,
+        duration_seconds: int = 5,
+        fps: int = 24,
+        size: str = "1280x720",
+        reference_video_b64: Optional[str] = None,
+        reference_image_b64: Optional[str] = None,
+        style_strength: float = 0.7
+    ) -> dict:
+        """Payload para generación/edición de video."""
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "duration_seconds": duration_seconds,
+            "fps": fps,
+            "size": size,
         }
-        return mapping.get(ratio, "1024x1024")
+        if reference_image_b64:
+            payload["start_image"] = reference_image_b64
+        if reference_video_b64:
+            payload["reference_video"] = reference_video_b64
+            payload["style_strength"] = round(float(style_strength), 2)
+
+        return payload
+
+    # ── Ejecutor de peticiones HTTP ───────────
+
+    def post(
+        self,
+        endpoint: str,
+        payload: dict,
+        timeout: int = CHAT_TIMEOUT
+    ) -> dict:
+        """
+        Ejecuta POST con reintentos y backoff exponencial.
+        Maneja: rate-limit (429), errores de servidor (5xx), timeouts.
+
+        Returns:
+            Respuesta JSON parseada
+        Raises:
+            RuntimeError si todos los reintentos fallan
+        """
+        last_error = None
+        delay = RETRY_BASE_DELAY
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                log.info(f"[Grok] POST → {endpoint} (intento {attempt}/{MAX_RETRIES})")
+                resp = requests.post(
+                    endpoint,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=timeout
+                )
+
+                # Rate limiting — esperar y reintentar
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", delay))
+                    log.warning(f"[Grok] Rate limit. Esperando {retry_after}s...")
+                    time.sleep(retry_after)
+                    delay *= 2
+                    continue
+
+                # Error del servidor — reintentable
+                if resp.status_code >= 500:
+                    log.warning(f"[Grok] Error servidor {resp.status_code}. Reintentando en {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+
+                # Error del cliente — no reintentable
+                if resp.status_code >= 400:
+                    try:
+                        err_body = resp.json()
+                    except Exception:
+                        err_body = resp.text
+                    raise RuntimeError(
+                        f"[Grok] Error API {resp.status_code}: {err_body}"
+                    )
+
+                return resp.json()
+
+            except requests.exceptions.Timeout:
+                last_error = f"Timeout en intento {attempt} (>{timeout}s)"
+                log.warning(f"[Grok] {last_error}")
+                time.sleep(delay)
+                delay *= 2
+
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"Error de conexión en intento {attempt}: {e}"
+                log.warning(f"[Grok] {last_error}")
+                time.sleep(delay)
+                delay *= 2
+
+        raise RuntimeError(
+            f"[Grok] Todos los intentos fallaron. Último error: {last_error}"
+        )
+
+    # ── Métodos de alto nivel ─────────────────
+
+    def chat(
+        self,
+        messages: list[dict],
+        model: str = DEFAULT_CHAT_MODEL,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        system_prompt: str = ""
+    ) -> str:
+        """Envía un chat multimodal y devuelve el texto de respuesta."""
+        payload = self.build_chat_payload(
+            messages, model, temperature, max_tokens, system_prompt
+        )
+        result = self.post(CHAT_ENDPOINT, payload, timeout=CHAT_TIMEOUT)
+        return result["choices"][0]["message"]["content"]
+
+    def generate_image(self, **kwargs) -> list[torch.Tensor]:
+        """
+        Genera o edita imágenes y devuelve lista de tensores ComfyUI.
+        Cada elemento es [1, H, W, C].
+        """
+        payload = self.build_image_generation_payload(**kwargs)
+        result = self.post(IMAGE_ENDPOINT, payload, timeout=CHAT_TIMEOUT)
+
+        tensors = []
+        for item in result.get("data", []):
+            if "b64_json" in item:
+                raw = base64.b64decode(item["b64_json"])
+                tensors.append(bytes_to_tensor(raw))
+            elif "url" in item:
+                img_resp = requests.get(item["url"], timeout=30)
+                img_resp.raise_for_status()
+                tensors.append(bytes_to_tensor(img_resp.content))
+
+        return tensors
+
+    def generate_video(self, **kwargs) -> torch.Tensor:
+        """
+        Genera o edita video. Devuelve tensor [B, H, W, C] con todos los frames.
+        """
+        payload = self.build_video_payload(**kwargs)
+        result = self.post(VIDEO_ENDPOINT, payload, timeout=VIDEO_TIMEOUT)
+        return _decode_video_response(result)
+
+
+# ──────────────────────────────────────────────
+# DECODIFICACIÓN DE VIDEO
+# ──────────────────────────────────────────────
+
+def _decode_video_response(api_result: dict) -> torch.Tensor:
+    """
+    Decodifica la respuesta de video de xAI y reconstruye un tensor
+    [B, H, W, C] compatible con ComfyUI VHS/VideoCombine.
+
+    La API puede devolver:
+      - frames como lista de base64
+      - URL de un archivo .mp4
+      - datos binarios directos
+    """
+    frames_tensors = []
+
+    # Caso 1: frames individuales en Base64
+    if "frames" in api_result:
+        for frame_b64 in api_result["frames"]:
+            raw = base64.b64decode(frame_b64)
+            frames_tensors.append(pil_to_tensor(Image.open(io.BytesIO(raw))))
+
+    # Caso 2: URL de video .mp4
+    elif "url" in api_result.get("data", [{}])[0] if api_result.get("data") else False:
+        video_url = api_result["data"][0]["url"]
+        frames_tensors = _download_and_decode_mp4(video_url)
+
+    # Caso 3: video en Base64
+    elif "b64_json" in api_result.get("data", [{}])[0] if api_result.get("data") else False:
+        video_bytes = base64.b64decode(api_result["data"][0]["b64_json"])
+        frames_tensors = _decode_mp4_bytes(video_bytes)
+
+    if not frames_tensors:
+        raise RuntimeError("[Grok Video] No se encontraron frames en la respuesta de la API.")
+
+    # Stack de todos los frames → [B, H, W, C]
+    return torch.cat(frames_tensors, dim=0)
+
+
+def _download_and_decode_mp4(url: str) -> list[torch.Tensor]:
+    """Descarga un .mp4 desde URL y decodifica sus frames."""
+    resp = requests.get(url, timeout=120, stream=True)
+    resp.raise_for_status()
+    return _decode_mp4_bytes(resp.content)
+
+
+def _decode_mp4_bytes(video_bytes: bytes) -> list[torch.Tensor]:
+    """
+    Decodifica bytes de un .mp4 a lista de tensores frame por frame.
+    Requiere OpenCV (cv2) o imageio según disponibilidad.
+    """
+    frames = []
+    try:
+        import cv2
+        import tempfile, os
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
+
+        cap = cv2.VideoCapture(tmp_path)
+        while True:
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            pil_frame = Image.fromarray(frame_rgb)
+            frames.append(pil_to_tensor(pil_frame))
+        cap.release()
+        os.unlink(tmp_path)
+
+    except ImportError:
+        # Fallback con imageio si cv2 no está disponible
+        try:
+            import imageio
+            import tempfile, os
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
+            reader = imageio.get_reader(tmp_path, format="mp4")
+            for frame_np in reader:
+                pil_frame = Image.fromarray(frame_np)
+                frames.append(pil_to_tensor(pil_frame))
+            reader.close()
+            os.unlink(tmp_path)
+
+        except ImportError:
+            raise RuntimeError(
+                "[Grok Video] Instala 'opencv-python' o 'imageio[ffmpeg]' "
+                "para decodificar video. Ejecuta: pip install opencv-python"
+            )
+
+    return frames
