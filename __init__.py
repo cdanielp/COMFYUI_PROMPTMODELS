@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
@@ -75,7 +75,7 @@ try:
     )
     NODE_CLASS_MAPPINGS.update(GOOGLEAI_CLASS)
     NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLEAI_NAMES)
-    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded{RESET}")
+    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded (V2.1){RESET}")
 except Exception as e:
     print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
