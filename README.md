@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
 
 <img src="prompts models logo.png" alt="Prompt Models Studio" width="200"/>
@@ -25,9 +24,6 @@ Desarrollado por [Prompt Models Studio](https://www.skool.com/prompt-models-stud
 ### Opción 1: Comfy Registry (Recomendado)
 ```bash
 comfy node install promptmodels
-
-```
-
 ### Opción 2: ComfyUI Manager
 
 Busca `PROMPTMODELS` en ComfyUI Manager e instala.
