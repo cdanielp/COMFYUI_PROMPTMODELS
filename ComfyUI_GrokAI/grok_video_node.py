@@ -1,224 +1,141 @@
-"""
-grok_video_node.py — Grok Video Forge
-======================================
-Nodo para generación y edición de video con xAI Grok Video Forge.
+# ==============================================================================
+# grok_video_node.py — Generador de Video (Grok Video Forge)
+# ==============================================================================
+# Se conecta a los modelos de video de xAI.
+# Convierte automáticamente el archivo MP4 de respuesta en un tensor de ComfyUI
+# [Batch, H, W, C] para que pueda ser guardado o procesado por otros nodos.
+# ==============================================================================
 
-Modos soportados:
-  - Texto → Video  : Solo prompt + parámetros
-  - Imagen → Video : Imagen inicial como primer frame
-  - Video  → Video : Edición de estilo con video de referencia
-
-Nota: La generación de video es inherentemente lenta (30–120 segundos).
-El nodo implementa un timeout extendido y no bloqueará ComfyUI gracias
-al manejo robusto de excepciones.
-
-Autor: Prompt Models Studio — xAI Integration Layer v2.0
-"""
-
+import os
+import requests
 import logging
 import torch
-from typing import Optional
+import numpy as np
+import cv2  # Librería estándar en el entorno de ComfyUI
+import tempfile
+from .grok_core import GrokCore, XAI_API_BASE
 
-from .grok_core import (
-    PayloadRouter,
-    tensor_to_base64,
-    sample_video_frames,
-    pil_to_tensor,
-    DEFAULT_VIDEO_MODEL,
-    VIDEO_TIMEOUT,
-)
+log = logging.getLogger("ComfyUI_GrokVideo")
 
-log = logging.getLogger("ComfyUI_Grok")
-
-# Modelos de video disponibles
-VIDEO_MODELS = [
-    "grok-video-forge",
-    "grok-video-forge-turbo",
+GROK_VIDEO_MODELS = [
+    "grok-video-preview",
+    "grok-video"
 ]
-
-VIDEO_SIZES = [
-    "1280x720",
-    "720x1280",
-    "1920x1080",
-    "1080x1920",
-    "1024x576",
-    "576x1024",
-]
-
-VIDEO_DURATIONS = [3, 4, 5, 6, 8, 10]
-
 
 class Grok_Video_Forge:
     """
-    [v2.0] Nodo de generación y edición de video con Grok Video Forge.
-
-    MODO 1 — Texto a Video:
-      Solo `prompt` + parámetros de video.
-
-    MODO 2 — Imagen a Video:
-      Conectar `start_image` como primer frame del video generado.
-
-    MODO 3 — Video a Video (Edición de estilo):
-      Conectar `reference_video` (tensor [B, H, W, C]).
-      Grok analizará su composición y generará uno nuevo siguiendo el prompt.
-
-    Salidas:
-      - IMAGE  : Tensor [B, H, W, C] con todos los frames del video
-      - INT    : Total de frames en el tensor resultante
-      - STRING : Información del proceso y modo utilizado
+    Nodo V2: Generador de Video (Text-to-Video e Image-to-Video).
+    Si se conecta una imagen base, la utiliza como el primer frame (Image-to-Video).
     """
-
-    CATEGORY     = "Grok/Video"
-    FUNCTION     = "forge_video"
-    RETURN_TYPES = ("IMAGE", "INT", "STRING")
-    RETURN_NAMES = ("video_frames", "frame_count", "info")
-
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "api_key":       ("STRING",       {"default": "", "multiline": False}),
-                "prompt":        ("STRING",       {
-                    "default": "A cinematic timelapse of a cyberpunk city at night, neon lights reflecting on wet streets, camera slowly pulling back.",
-                    "multiline": True
-                }),
-                "model":         (VIDEO_MODELS,   {"default": "grok-video-forge"}),
-                "size":          (VIDEO_SIZES,    {"default": "1280x720"}),
-                "duration_sec":  ([str(d) for d in VIDEO_DURATIONS], {"default": "5"}),
-                "fps":           ("INT",          {"default": 24, "min": 12, "max": 60, "step": 1}),
-                "style_strength":("FLOAT",        {
-                    "default": 0.7,
-                    "min": 0.1,
-                    "max": 1.0,
-                    "step": 0.05,
-                    "display": "slider"
-                }),
-                "negative_prompt": ("STRING",     {
-                    "default": "blurry, watermark, text overlay, low quality",
-                    "multiline": True
-                }),
+                "prompt": ("STRING", {"multiline": True, "default": "A cinematic shot of a futuristic neon city, camera panning forward."}),
+                "model": (GROK_VIDEO_MODELS, {"default": "grok-video-preview"}),
+                "fps": ("INT", {"default": 24, "min": 8, "max": 60}),
+                "api_key": ("STRING", {"multiline": False, "default": ""}),
             },
             "optional": {
-                # Imagen inicial (convierte imagen → video)
-                "start_image":          ("IMAGE",),
-                # Video de referencia para edición de estilo
-                "reference_video":      ("IMAGE",),
-                # Cuántos frames del video de referencia enviar a la API
-                "ref_video_max_frames": ("INT", {"default": 6, "min": 1, "max": 16, "step": 1}),
+                "reference_image": ("IMAGE",),  # Imagen inicial para Image-to-Video
             }
         }
 
-    def forge_video(
-        self,
-        api_key: str,
-        prompt: str,
-        model: str,
-        size: str,
-        duration_sec: str,
-        fps: int,
-        style_strength: float,
-        negative_prompt: str,
-        start_image=None,
-        reference_video=None,
-        ref_video_max_frames: int = 6,
-    ):
-        # ── Tensor de fallback (1 frame negro) ──────────────────────
-        black_frame = torch.zeros(1, 720, 1280, 3)
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("video_frames",)
+    FUNCTION = "generate_video"
+    CATEGORY = "xAI/Grok"
+
+    def generate_video(self, prompt, model, fps, api_key, reference_image=None):
+        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+        core = GrokCore(key) if key else None
+        
+        if not core:
+            log.error("[Grok_Video_Forge] Error: API Key no configurada.")
+            return (GrokCore.create_error_tensor(),)
 
         try:
-            router = PayloadRouter(api_key)
-            duration = int(duration_sec)
+            url = f"{XAI_API_BASE}/videos/generations"
+            payload = {
+                "prompt": prompt,
+                "model": model,
+            }
 
-            # ── Determinar modo ──────────────────────────────────────
-            has_start_img = start_image is not None
-            has_ref_video = reference_video is not None and reference_video.shape[0] > 1
+            # Si hay imagen conectada, la pasamos a base64 para Image-to-Video
+            if reference_image is not None:
+                log.info("[Grok_Video_Forge] Imagen de referencia detectada (Image-to-Video).")
+                img_b64 = core.tensor_to_base64(reference_image, format="JPEG")
+                payload["image"] = f"data:image/jpeg;base64,{img_b64}"
 
-            if has_ref_video:
-                mode = "video-to-video"
-            elif has_start_img:
-                mode = "imagen-a-video"
-            else:
-                mode = "texto-a-video"
+            log.info(f"[Grok_Video_Forge] Solicitando video a {model}... (Esto puede tardar varios minutos)")
+            
+            # Petición HTTP Pura. Timeout alto (10 minutos) porque el video tarda en renderizar
+            response = requests.post(url, headers=core.headers, json=payload, timeout=600)
+            
+            if not response.ok:
+                err_msg = response.json().get("error", {}).get("message", response.text)
+                log.error(f"[Grok_Video_Forge] Error HTTP {response.status_code}: {err_msg}")
+                return (core.create_error_tensor(),)
 
-            log.info(f"[Grok Video Forge] Modo: {mode.upper()}")
-            log.info(f"[Grok Video Forge] Duración: {duration}s @ {fps}fps → ~{duration * fps} frames esperados")
+            res_json = response.json()
+            
+            # Asumimos que la API devuelve una URL para descargar el archivo .mp4
+            # (Estándar en la mayoría de APIs REST de video para 2026)
+            video_url = res_json["data"][0]["url"]
+            
+            log.info("[Grok_Video_Forge] Video generado en la nube. Descargando y decodificando frames...")
+            return self._download_and_decode_video(video_url)
 
-            # ── Enriquecer prompt ────────────────────────────────────
-            full_prompt = prompt
-            if negative_prompt.strip():
-                full_prompt += f"\n\nNegative prompt: {negative_prompt}"
+        except requests.exceptions.Timeout:
+            log.error("[Grok_Video_Forge] Timeout: La generación de video tomó demasiado tiempo.")
+            return (GrokCore.create_error_tensor(),)
+        except Exception as e:
+            log.error(f"[Grok_Video_Forge] Fallo crítico: {str(e)}")
+            return (GrokCore.create_error_tensor(),)
 
-            # ── Convertir imagen inicial a Base64 ────────────────────
-            start_img_b64 = None
-            if has_start_img:
-                log.info("[Grok Video Forge] Procesando imagen inicial como primer frame...")
-                start_img_b64 = tensor_to_base64(
-                    start_image,
-                    batch_index=0,
-                    format="JPEG",
-                    quality=90
-                )
+    def _download_and_decode_video(self, video_url: str):
+        """
+        Descarga el MP4 temporalmente y usa OpenCV para extraer los frames
+        y convertirlos en un tensor de ComfyUI.
+        """
+        try:
+            # Descargar el video a un archivo temporal
+            vid_response = requests.get(video_url, stream=True, timeout=120)
+            vid_response.raise_for_status()
 
-            # ── Procesar video de referencia con muestreo ────────────
-            ref_video_b64 = None
-            if has_ref_video:
-                total_ref_frames = reference_video.shape[0]
-                log.info(
-                    f"[Grok Video Forge] Video referencia: {total_ref_frames} frames. "
-                    f"Muestreando {ref_video_max_frames} frames representativos..."
-                )
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_vid:
+                for chunk in vid_response.iter_content(chunk_size=8192):
+                    temp_vid.write(chunk)
+                temp_vid_path = temp_vid.name
 
-                sampled_frames = sample_video_frames(
-                    reference_video,
-                    max_frames=ref_video_max_frames,
-                    strategy="uniform"
-                )
+            # Extraer frames con OpenCV
+            cap = cv2.VideoCapture(temp_vid_path)
+            frames = []
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                # OpenCV lee en BGR, convertimos a RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # Normalizamos a float32 entre 0.0 y 1.0
+                frame_normalized = frame_rgb.astype(np.float32) / 255.0
+                frames.append(frame_normalized)
 
-                # Para video-to-video: usar el primer frame muestreado
-                # como imagen de referencia (la API acepta imagen, no video completo)
-                # En una implementación futura, si la API acepta video, enviar todos
-                ref_video_b64 = tensor_to_base64(
-                    sampled_frames[0],
-                    batch_index=0,
-                    format="JPEG",
-                    quality=90
-                )
+            cap.release()
+            os.remove(temp_vid_path) # Limpiar archivo temporal
 
-                # Añadir contexto del video al prompt
-                full_prompt += (
-                    f"\n\n[REFERENCIA DE ESTILO: Analiza y replica el estilo visual, "
-                    f"composición y paleta de colores del video de referencia. "
-                    f"El video tiene {total_ref_frames} frames totales.]"
-                )
+            if not frames:
+                log.error("[Grok_Video_Forge] No se pudieron extraer frames del video.")
+                return (GrokCore.create_error_tensor(),)
 
-            # ── Llamada a la API con timeout extendido ───────────────
-            log.info(f"[Grok Video Forge] Enviando a API... (timeout: {VIDEO_TIMEOUT}s)")
-            video_tensor = router.generate_video(
-                prompt=full_prompt,
-                model=model,
-                duration_seconds=duration,
-                fps=fps,
-                size=size,
-                reference_video_b64=ref_video_b64,
-                reference_image_b64=start_img_b64 if not has_ref_video else None,
-                style_strength=style_strength
-            )
-
-            frame_count = video_tensor.shape[0]
-            log.info(f"[Grok Video Forge] Video recibido: {frame_count} frames. Shape: {video_tensor.shape}")
-
-            info = (
-                f"✅ Video generado exitosamente\n"
-                f"Modo: {mode}\n"
-                f"Modelo: {model}\n"
-                f"Resolución: {size} | Duración: {duration}s @ {fps}fps\n"
-                f"Frames totales: {frame_count}\n"
-                f"Style Strength: {style_strength if has_ref_video else 'N/A'}"
-            )
-
-            return (video_tensor, frame_count, info)
+            # Convertir lista de frames a un solo tensor de PyTorch [Batch, H, W, C]
+            # Batch size = número de frames
+            video_tensor = torch.from_numpy(np.array(frames))
+            log.info(f"[Grok_Video_Forge] Éxito: Tensor de video creado con forma {video_tensor.shape}")
+            
+            return (video_tensor,)
 
         except Exception as e:
-            error_msg = f"[Grok_Video_Forge ERROR] {e}"
-            log.error(error_msg)
-            return (black_frame, 0, error_msg)
+            log.error(f"[Grok_Video_Forge] Error procesando el archivo de video: {e}")
+            return (GrokCore.create_error_tensor(),)
