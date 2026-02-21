@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
-description = "Custom nodes for ComfyUI by PROMPTMODELS. Includes Google Gemini, Grok, Logic Utils, and Conflict-Free Set/Get Nodes."
-version = "1.0.6"
+description = "Custom nodes for ComfyUI by PROMPTMODELS. Includes Google Gemini, Grok V2.0, Logic Utils, and Conflict-Free Set/Get Nodes."
+version = "1.2.1"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
@@ -19,7 +19,7 @@ Includes = [
   "__init__.py",
   "requirements.txt",
   "ComfyUI_GoogleAI",
-  "ComfyUI_Grok",
+  "ComfyUI_GrokAI",
   "GETSETNODE_PRO",
   "DivisorDePrompts",
   "get_last_frame",
