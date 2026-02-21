@@ -1,7 +1,10 @@
 """
-ComfyUI_GoogleAI - Suite Integral de Google AI (V2.0)
+ComfyUI_GoogleAI - Suite Integral de Google AI (V2.1)
 ======================================================
 Gemini 3.1 Pro | Imagen 3 | Veo 3.1 | Lyria 3 | Diagnóstico
+
+V2.1: Async video polling | Seed sanitization | Multimodal master node
+      folder_paths dropdowns | Type Mismatch fallback audio
 
 ⚠️ RETROCOMPATIBILIDAD: Clases originales NO se renombran ni eliminan.
 📦 El "Explicador de Errores" fue movido a ComfyUI_UniversalErrorExplainer.
@@ -53,9 +56,9 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "GoogleAI_TextNode": "🔤 Google AI - Text Generator",
+    "GoogleAI_TextNode": "🔤 Google AI - Multimodal Text (Gemini 3.1)",
     "GoogleAI_TextVisionNode": "👁️ Google AI - Vision Analyzer",
-    "GoogleAI_ImageNode": "🎨 Google AI - Image Generator",
+    "GoogleAI_ImageNode": "🎨 Google AI - Image Generator (Imagen 3)",
     "GoogleAI_ImageBatchNode": "🖼️ Google AI - Image Batch",
     "GoogleAI_VideoGenerator": "🎬 Google AI - Video Generator (Veo 3.1)",
     "GoogleAI_VideoInterpolation": "🔀 Google AI - Video Interpolation",
@@ -75,7 +78,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 WEB_DIRECTORY = "./web"
 
 # ============================================================================
-# SERVIDOR - Solo endpoint de health (error explainer fue movido)
+# SERVIDOR - Endpoint de health
 # ============================================================================
 try:
     from server import PromptServer
@@ -85,9 +88,11 @@ try:
         """Endpoint de verificación de salud."""
         return web.json_response({
             "status": "ok",
-            "version": "2.0.0",
+            "version": "2.1.0",
             "nodes": len(NODE_CLASS_MAPPINGS),
             "suites": ["text", "image", "video", "audio", "diagnostic"],
+            "video_polling": "async (aiohttp)",
+            "seed_sanitization": "64→32 bits",
         })
 
     logger.info("[GoogleAI] Ruta registrada: /google-ai/health")
@@ -102,9 +107,10 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
 print(
     f"\n{'='*60}\n"
-    f"  ✅ ComfyUI_GoogleAI V2.0 — {len(NODE_CLASS_MAPPINGS)} nodos\n"
-    f"  🔤 Texto  | 👁️ Vision | 🎨 Imagen | 🎬 Video\n"
-    f"  🎵 Audio  | 🔍 Diagnóstico (5 nodos)\n"
+    f"  ✅ ComfyUI_GoogleAI V2.1 — {len(NODE_CLASS_MAPPINGS)} nodos\n"
+    f"  🔤 Multimodal | 🎨 Imagen | 🎬 Video (async)\n"
+    f"  🎵 Audio     | 🔍 Diagnóstico (folder_paths)\n"
+    f"  🛡️ Seed 64→32 | opencv-headless | Type-safe audio\n"
     f"  💡 Error Explainer → ComfyUI_UniversalErrorExplainer\n"
     f"{'='*60}\n"
 )

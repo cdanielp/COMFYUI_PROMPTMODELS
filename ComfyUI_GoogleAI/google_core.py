@@ -1,8 +1,13 @@
 """
-google_core.py - Motor Central de la API de Google AI (V2.0)
+google_core.py - Motor Central de la API de Google AI (V2.1)
 ============================================================
 Maneja TODAS las comunicaciones HTTP con la API REST de Google.
-Regla de Oro: CERO SDKs. Solo requests puras.
+Regla de Oro: CERO SDKs. Solo requests puras (+ aiohttp para video async).
+
+V2.1 Cambios:
+  - generate_video → async (aiohttp + asyncio.sleep)
+  - safe_seed() → sanitización 64→32 bits
+  - generate_image ahora acepta reference_images_b64
 
 Autor: Prompt Models Studio | cdanielp
 """
@@ -14,6 +19,8 @@ import io
 import os
 import tempfile
 import time
+import asyncio
+import aiohttp
 import logging
 from typing import Optional, Dict, Any, List, Tuple, Union
 
@@ -54,7 +61,7 @@ VEO_RESOLUTION_PRESETS = {
 VEO_DURATION_OPTIONS = [4, 6, 8]
 
 # ============================================================================
-# SYSTEM PROMPTS HARDCODED (Solo Diagnóstico — Error Explainer fue movido)
+# SYSTEM PROMPTS HARDCODED (Solo Diagnóstico)
 # ============================================================================
 SYSTEM_PROMPT_ARCHITECTURE_DETECTOR = (
     "Eres un experto en modelos de difusión. Analiza estos keys de un archivo "
@@ -93,10 +100,11 @@ class GoogleAICore:
     """
     Motor central para todas las comunicaciones con la API de Google AI.
     Usa EXCLUSIVAMENTE requests HTTP puras. CERO SDKs.
+    Video: polling asíncrono con aiohttp (V2.1).
     """
 
     # ========================================================================
-    # RESOLUCIÓN DE API KEY (Orden de prioridad)
+    # RESOLUCIÓN DE API KEY
     # ========================================================================
     @staticmethod
     def resolve_api_key(node_key: str = "") -> str:
@@ -107,22 +115,28 @@ class GoogleAICore:
         3. Variable de entorno GOOGLE_AI_API_KEY
         4. ValueError si no hay nada
         """
-        # Prioridad 1 y 2: Campo del nodo (ya incluye inyección del JS)
         if node_key and node_key.strip():
             return node_key.strip()
-
-        # Prioridad 3: Variable de entorno
         env_key = os.environ.get("GOOGLE_AI_API_KEY", "").strip()
         if env_key:
             return env_key
-
-        # Prioridad 4: Error limpio
         raise ValueError(
             "❌ API Key no encontrada. Configúrala en:\n"
             "  1. El campo 'api_key' del nodo, O\n"
             "  2. Los Ajustes de ComfyUI (⚙️ > Google AI API Key), O\n"
             "  3. La variable de entorno GOOGLE_AI_API_KEY"
         )
+
+    # ========================================================================
+    # SANITIZACIÓN DE SEMILLAS (64-bit → 32-bit)
+    # ========================================================================
+    @staticmethod
+    def safe_seed(seed: int) -> int:
+        """
+        Sanitiza semillas de 64 bits generadas por otros nodos de ComfyUI
+        a 32 bits (max 2147483647) para evitar crashes con APIs de Google.
+        """
+        return int(seed) % 2147483648
 
     # ========================================================================
     # PETICIONES HTTP CENTRALES
@@ -145,10 +159,7 @@ class GoogleAICore:
         generation_config: Optional[Dict] = None,
         timeout: int = 120,
     ) -> Dict[str, Any]:
-        """
-        Llamada genérica a la API de Gemini (generateContent).
-        Retorna el JSON de respuesta completo.
-        """
+        """Llamada genérica a la API de Gemini (generateContent)."""
         url = GoogleAICore._build_url(model, api_key)
         payload: Dict[str, Any] = {"contents": contents}
 
@@ -178,7 +189,6 @@ class GoogleAICore:
             raise RuntimeError(
                 f"Error HTTP {status_code} de la API de Gemini:\n{error_body}"
             ) from e
-
         except requests.exceptions.Timeout:
             raise RuntimeError(
                 f"Timeout ({timeout}s) al contactar la API de Gemini. "
@@ -241,7 +251,7 @@ class GoogleAICore:
             return f"[Error al parsear respuesta: {str(e)}]"
 
     # ========================================================================
-    # GENERACIÓN DE IMÁGENES (Imagen 3 / Nano Banana)
+    # GENERACIÓN DE IMÁGENES (Imagen 3)
     # ========================================================================
     @staticmethod
     def generate_image(
@@ -251,19 +261,37 @@ class GoogleAICore:
         negative_prompt: str = "",
         aspect_ratio: str = "1:1",
         num_images: int = 1,
+        seed: Optional[int] = None,
+        reference_images_b64: Optional[List[str]] = None,
     ) -> List[bytes]:
-        """Genera imágenes usando la API de Imagen 3. Retorna lista de bytes PNG."""
+        """
+        Genera imágenes usando Imagen 3. Retorna lista de bytes PNG.
+        Acepta hasta 5 imágenes de referencia y semilla sanitizada.
+        """
         url = GoogleAICore._build_url(model, api_key)
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseModalities": ["IMAGE"],
-                "imageSizes": aspect_ratio,
-            },
+        # Construir parts con imágenes de referencia + prompt
+        parts = []
+        if reference_images_b64:
+            for ref_b64 in reference_images_b64:
+                parts.append({
+                    "inlineData": {"mimeType": "image/png", "data": ref_b64}
+                })
+        parts.append({"text": prompt})
+
+        gen_config: Dict[str, Any] = {
+            "responseModalities": ["IMAGE"],
+            "imageSizes": aspect_ratio,
         }
         if negative_prompt:
-            payload["generationConfig"]["negativePrompt"] = negative_prompt
+            gen_config["negativePrompt"] = negative_prompt
+        if seed is not None:
+            gen_config["seed"] = GoogleAICore.safe_seed(seed)
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": gen_config,
+        }
 
         try:
             response = requests.post(
@@ -294,10 +322,10 @@ class GoogleAICore:
             )
 
     # ========================================================================
-    # GENERACIÓN DE VIDEO (Veo 3.1) - API Asíncrona con Polling
+    # GENERACIÓN DE VIDEO (Veo 3.1) — Polling Asíncrono (V2.1)
     # ========================================================================
     @staticmethod
-    def generate_video(
+    async def generate_video(
         api_key: str,
         prompt: str,
         model: str = DEFAULT_VIDEO_MODEL,
@@ -309,7 +337,11 @@ class GoogleAICore:
         poll_interval: int = 15,
         max_wait: int = 600,
     ) -> bytes:
-        """Genera video usando Veo 3.1 (API asíncrona con polling). Retorna bytes MP4."""
+        """
+        Genera video usando Veo 3.1 con polling asíncrono no bloqueante.
+        Usa aiohttp + asyncio.sleep para no bloquear el event loop de ComfyUI.
+        Retorna bytes MP4.
+        """
         url = VEO_PREDICT_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
@@ -350,64 +382,84 @@ class GoogleAICore:
         }
 
         try:
-            # 1. Iniciar operación
-            response = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=60,
+            timeout_cfg = aiohttp.ClientTimeout(
+                total=None, sock_connect=30, sock_read=120
             )
-            response.raise_for_status()
-            operation = response.json()
-            operation_name = operation.get("name", "")
+            async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+                # 1. Iniciar operación (POST)
+                async with session.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                ) as response:
+                    if not response.ok:
+                        err_text = await response.text()
+                        try:
+                            err_msg = json.loads(err_text).get("error", {}).get("message", err_text[:500])
+                        except (json.JSONDecodeError, AttributeError):
+                            err_msg = err_text[:500]
+                        raise RuntimeError(
+                            f"Error HTTP {response.status} en Veo 3.1: {err_msg}"
+                        )
+                    operation = await response.json()
+                    operation_name = operation.get("name", "")
 
-            if not operation_name:
-                raise RuntimeError("La API no retornó un nombre de operación válido.")
+                if not operation_name:
+                    raise RuntimeError("La API no retornó un nombre de operación válido.")
 
-            # 2. Polling hasta completar
-            elapsed = 0
-            while elapsed < max_wait:
-                time.sleep(poll_interval)
-                elapsed += poll_interval
+                logger.info(f"[Veo 3.1] Operación iniciada: {operation_name}")
 
-                poll_url = f"{GEMINI_BASE_URL}/operations/{operation_name}?key={api_key}"
-                poll_resp = requests.get(poll_url, timeout=30)
-                poll_resp.raise_for_status()
-                poll_data = poll_resp.json()
+                # 2. Polling asíncrono (no bloquea el event loop de ComfyUI)
+                elapsed = 0
+                while elapsed < max_wait:
+                    await asyncio.sleep(poll_interval)
+                    elapsed += poll_interval
 
-                if poll_data.get("done", False):
-                    result = poll_data.get("response", {})
-                    # Intentar inline data
-                    for cand in result.get("candidates", []):
-                        for part in cand.get("content", {}).get("parts", []):
-                            if "inlineData" in part:
-                                return base64.b64decode(part["inlineData"]["data"])
+                    poll_url = f"{GEMINI_BASE_URL}/operations/{operation_name}?key={api_key}"
+                    async with session.get(poll_url) as poll_resp:
+                        if not poll_resp.ok:
+                            err_text = await poll_resp.text()
+                            try:
+                                err_msg = json.loads(err_text).get("error", {}).get("message", err_text[:500])
+                            except (json.JSONDecodeError, AttributeError):
+                                err_msg = err_text[:500]
+                            raise RuntimeError(
+                                f"Error HTTP {poll_resp.status} en polling Veo: {err_msg}"
+                            )
+                        poll_data = await poll_resp.json()
 
-                    # Intentar videoUri
-                    generated = result.get("generatedVideos", [])
-                    if generated:
-                        video_uri = generated[0].get("video", {}).get("uri", "")
-                        if video_uri:
-                            vid_resp = requests.get(f"{video_uri}&key={api_key}", timeout=120)
-                            vid_resp.raise_for_status()
-                            return vid_resp.content
+                    if poll_data.get("done", False):
+                        result = poll_data.get("response", {})
 
-                    raise RuntimeError("Operación finalizada pero no se encontró video.")
+                        # Intentar inlineData
+                        for cand in result.get("candidates", []):
+                            for part in cand.get("content", {}).get("parts", []):
+                                if "inlineData" in part:
+                                    logger.info(f"[Veo 3.1] ✅ Video recibido (inlineData) en {elapsed}s")
+                                    return base64.b64decode(part["inlineData"]["data"])
 
-                metadata = poll_data.get("metadata", {})
-                progress = metadata.get("progress", "desconocido")
-                logger.info(f"[Veo 3.1] Generando... Progreso: {progress} | {elapsed}s")
+                        # Intentar videoUri
+                        generated = result.get("generatedVideos", [])
+                        if generated:
+                            video_uri = generated[0].get("video", {}).get("uri", "")
+                            if video_uri:
+                                async with session.get(f"{video_uri}&key={api_key}") as vid_resp:
+                                    if vid_resp.ok:
+                                        logger.info(f"[Veo 3.1] ✅ Video recibido (videoUri) en {elapsed}s")
+                                        return await vid_resp.read()
 
-            raise RuntimeError(f"Timeout: La generación excedió {max_wait}s.")
+                        raise RuntimeError("Operación finalizada pero no se encontró video.")
 
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "N/A"
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = str(e)
-            raise RuntimeError(f"Error HTTP {status} en Veo 3.1: {body}")
+                    metadata = poll_data.get("metadata", {})
+                    progress = metadata.get("progress", "desconocido")
+                    logger.info(f"[Veo 3.1] Generando... Progreso: {progress} | {elapsed}s/{max_wait}s")
+
+                raise RuntimeError(f"Timeout: La generación excedió {max_wait}s.")
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Error inesperado en Veo 3.1: {str(e)}") from e
 
     # ========================================================================
     # GENERACIÓN DE AUDIO (Lyria 3)

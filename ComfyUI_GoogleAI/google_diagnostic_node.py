@@ -1,7 +1,16 @@
 """
-google_diagnostic_node.py - Nodos de Diagnóstico para ComfyUI (V2.0)
+google_diagnostic_node.py - Nodos de Diagnóstico para ComfyUI (V2.1)
 =====================================================================
 Gemini 3.1 Pro para análisis de modelos, LoRAs, workflows, compatibilidad.
+
+V2.1 Cambios:
+  Subgrupo A (ArchitectureDetector, TriggerWordExtractor, CompatibilityChecker):
+    - Eliminados inputs STRING manuales para rutas
+    - Menús desplegables nativos via folder_paths.get_filename_list()
+    - Backend usa folder_paths.get_full_path() para resolver rutas absolutas
+  Subgrupo B (WorkflowAnalyzer, LoRATrainingAnalyzer):
+    - Mantienen STRING multiline para texto manual
+    - Nuevo optional: text_or_file_path con forceInput=True (puerto físico)
 
 Autor: Prompt Models Studio | cdanielp
 """
@@ -12,6 +21,8 @@ import io
 import os
 import logging
 from typing import Dict, Any
+
+import folder_paths
 
 from .google_core import (
     GoogleAICore, DEFAULT_TEXT_MODEL,
@@ -25,14 +36,23 @@ logger = logging.getLogger("ComfyUI_GoogleAI")
 DIAG_MODELS = ["gemini-3.1-pro-preview", "gemini-2.5-flash-preview-05-20"]
 
 
+# ============================================================================
+# SUBGRUPO A: Menús Desplegables Inteligentes
+# ============================================================================
+
 class GoogleAI_ModelArchitectureDetector:
-    """Extrae keys de un .safetensors y Gemini identifica la arquitectura."""
+    """
+    Extrae keys de un .safetensors y Gemini identifica la arquitectura.
+    UI: Menú desplegable nativo de checkpoints.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "safetensors_path": ("STRING", {"default": ""}),
+                "checkpoint": (folder_paths.get_filename_list("checkpoints"), {
+                    "tooltip": "Selecciona un checkpoint .safetensors del menú.",
+                }),
             },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
@@ -45,33 +65,37 @@ class GoogleAI_ModelArchitectureDetector:
     FUNCTION = "detect_architecture"
     CATEGORY = "Google AI/Diagnostic"
 
-    def detect_architecture(self, safetensors_path, api_key="", model="gemini-3.1-pro-preview"):
+    def detect_architecture(self, checkpoint, api_key="", model="gemini-3.1-pro-preview"):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            if not os.path.isfile(safetensors_path):
-                return (f"❌ Archivo no encontrado: {safetensors_path}",)
-            if not safetensors_path.endswith(".safetensors"):
-                return ("❌ El archivo debe ser .safetensors",)
+
+            # Resolver ruta absoluta via folder_paths
+            full_path = folder_paths.get_full_path("checkpoints", checkpoint)
+            if not full_path or not os.path.isfile(full_path):
+                return (f"❌ Checkpoint no encontrado: {checkpoint}",)
+
+            if not full_path.endswith(".safetensors"):
+                return ("❌ El archivo debe ser .safetensors para analizar la arquitectura.",)
 
             try:
                 from safetensors import safe_open
             except ImportError:
-                return ("❌ Librería 'safetensors' no instalada.",)
+                return ("❌ Librería 'safetensors' no instalada. pip install safetensors",)
 
-            with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+            with safe_open(full_path, framework="pt", device="cpu") as f:
                 tensor_keys = list(f.keys())
 
             if not tensor_keys:
                 return ("❌ El archivo no contiene tensores válidos.",)
 
-            # Limitar para no exceder contexto
+            # Limitar para no exceder contexto de Gemini
             if len(tensor_keys) > 250:
                 sample = tensor_keys[:200] + ["... (truncado) ..."] + tensor_keys[-50:]
             else:
                 sample = tensor_keys
 
             prompt = (
-                f"Archivo: {os.path.basename(safetensors_path)}\n"
+                f"Archivo: {checkpoint}\n"
                 f"Total tensores: {len(tensor_keys)}\n\nKeys:\n" + "\n".join(sample)
             )
             result = GoogleAICore.call_gemini_text(
@@ -86,12 +110,19 @@ class GoogleAI_ModelArchitectureDetector:
 
 
 class GoogleAI_TriggerWordExtractor:
-    """Extrae ss_tag_frequency de un LoRA y formatea trigger words con Gemini."""
+    """
+    Extrae ss_tag_frequency de un LoRA y formatea trigger words con Gemini.
+    UI: Menú desplegable nativo de LoRAs.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {"lora_path": ("STRING", {"default": ""})},
+            "required": {
+                "lora": (folder_paths.get_filename_list("loras"), {
+                    "tooltip": "Selecciona un LoRA del menú desplegable.",
+                }),
+            },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
                 "model": (DIAG_MODELS, {"default": "gemini-2.5-flash-preview-05-20"}),
@@ -103,18 +134,20 @@ class GoogleAI_TriggerWordExtractor:
     FUNCTION = "extract_triggers"
     CATEGORY = "Google AI/Diagnostic"
 
-    def extract_triggers(self, lora_path, api_key="", model="gemini-2.5-flash-preview-05-20"):
+    def extract_triggers(self, lora, api_key="", model="gemini-2.5-flash-preview-05-20"):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            if not os.path.isfile(lora_path):
-                return (f"❌ Archivo no encontrado: {lora_path}",)
+
+            full_path = folder_paths.get_full_path("loras", lora)
+            if not full_path or not os.path.isfile(full_path):
+                return (f"❌ LoRA no encontrado: {lora}",)
 
             try:
                 from safetensors import safe_open
             except ImportError:
-                return ("❌ Librería 'safetensors' no instalada.",)
+                return ("❌ Librería 'safetensors' no instalada. pip install safetensors",)
 
-            with safe_open(lora_path, framework="pt", device="cpu") as f:
+            with safe_open(full_path, framework="pt", device="cpu") as f:
                 metadata = f.metadata() or {}
 
             tag_freq_raw = metadata.get("ss_tag_frequency", "")
@@ -123,7 +156,10 @@ class GoogleAI_TriggerWordExtractor:
                 if alt:
                     tag_freq_raw = metadata[alt[0]]
                 else:
-                    return (f"⚠️ No se encontró 'ss_tag_frequency'. Keys: {', '.join(list(metadata.keys())[:20])}",)
+                    return (
+                        f"⚠️ No se encontró 'ss_tag_frequency' en {lora}.\n"
+                        f"Keys de metadata: {', '.join(list(metadata.keys())[:20])}"
+                    ,)
 
             if isinstance(tag_freq_raw, str):
                 try:
@@ -134,7 +170,7 @@ class GoogleAI_TriggerWordExtractor:
                 tag_freq = tag_freq_raw
 
             prompt = (
-                f"LoRA: {os.path.basename(lora_path)}\n\n"
+                f"LoRA: {lora}\n\n"
                 f"ss_tag_frequency:\n{json.dumps(tag_freq, indent=2, ensure_ascii=False)[:8000]}"
             )
             result = GoogleAICore.call_gemini_text(
@@ -148,81 +184,22 @@ class GoogleAI_TriggerWordExtractor:
             return (f"❌ Error: {str(e)}",)
 
 
-class GoogleAI_WorkflowAnalyzer:
-    """Analiza class_type de un workflow JSON y Gemini devuelve repos de GitHub."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "workflow_json": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "JSON del workflow o ruta al archivo .json.",
-                }),
-            },
-            "optional": {
-                "api_key": ("STRING", {"default": ""}),
-                "model": (DIAG_MODELS, {"default": "gemini-3.1-pro-preview"}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("analysis_report",)
-    FUNCTION = "analyze_workflow"
-    CATEGORY = "Google AI/Diagnostic"
-
-    def analyze_workflow(self, workflow_json, api_key="", model="gemini-3.1-pro-preview"):
-        try:
-            key = GoogleAICore.resolve_api_key(api_key)
-
-            if os.path.isfile(workflow_json.strip()):
-                with open(workflow_json.strip(), "r", encoding="utf-8") as f:
-                    workflow_data = json.load(f)
-            else:
-                try:
-                    workflow_data = json.loads(workflow_json)
-                except json.JSONDecodeError:
-                    return ("❌ No es un JSON válido ni una ruta existente.",)
-
-            class_types = set()
-            if isinstance(workflow_data, dict):
-                for nid, ndata in workflow_data.items():
-                    if isinstance(ndata, dict) and "class_type" in ndata:
-                        class_types.add(ndata["class_type"])
-                for node in workflow_data.get("nodes", []):
-                    if isinstance(node, dict):
-                        ct = node.get("type", node.get("class_type", ""))
-                        if ct:
-                            class_types.add(ct)
-
-            if not class_types:
-                return ("⚠️ No se encontraron 'class_type' en el JSON.",)
-
-            sorted_ct = sorted(class_types)
-            prompt = (
-                f"Nodos ({len(sorted_ct)} tipos):\n\n"
-                + "\n".join(f"- {ct}" for ct in sorted_ct)
-            )
-            result = GoogleAICore.call_gemini_text(
-                api_key=key, prompt=prompt, model=model,
-                system_instruction=SYSTEM_PROMPT_WORKFLOW_ANALYZER,
-            )
-            return (result,)
-
-        except Exception as e:
-            logger.error(f"[WorkflowAnalyzer] Error: {e}")
-            return (f"❌ Error: {str(e)}",)
-
-
 class GoogleAI_CompatibilityChecker:
-    """Verifica compatibilidad checkpoint + LoRA analizando dimensiones de tensores."""
+    """
+    Verifica compatibilidad checkpoint + LoRA analizando dimensiones de tensores.
+    UI: Menús desplegables nativos para ambos.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "checkpoint_path": ("STRING", {"default": ""}),
-                "lora_path": ("STRING", {"default": ""}),
+                "checkpoint": (folder_paths.get_filename_list("checkpoints"), {
+                    "tooltip": "Selecciona un checkpoint del menú.",
+                }),
+                "lora": (folder_paths.get_filename_list("loras"), {
+                    "tooltip": "Selecciona un LoRA del menú.",
+                }),
             },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
@@ -235,27 +212,32 @@ class GoogleAI_CompatibilityChecker:
     FUNCTION = "check_compatibility"
     CATEGORY = "Google AI/Diagnostic"
 
-    def check_compatibility(self, checkpoint_path, lora_path,
+    def check_compatibility(self, checkpoint, lora,
                             api_key="", model="gemini-2.5-flash-preview-05-20"):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
+
             try:
                 from safetensors import safe_open
             except ImportError:
                 return (False, "❌ Librería 'safetensors' no instalada.",)
 
-            for path, name in [(checkpoint_path, "Checkpoint"), (lora_path, "LoRA")]:
-                if not os.path.isfile(path):
-                    return (False, f"❌ {name} no encontrado: {path}",)
+            # Resolver rutas absolutas
+            ckpt_path = folder_paths.get_full_path("checkpoints", checkpoint)
+            lora_path = folder_paths.get_full_path("loras", lora)
 
-            ckpt_info = self._extract_info(checkpoint_path)
+            for path, name, label in [(ckpt_path, checkpoint, "Checkpoint"), (lora_path, lora, "LoRA")]:
+                if not path or not os.path.isfile(path):
+                    return (False, f"❌ {label} no encontrado: {name}",)
+
+            ckpt_info = self._extract_info(ckpt_path)
             lora_info = self._extract_info(lora_path)
 
             prompt = (
-                f"**Checkpoint:** {os.path.basename(checkpoint_path)}\n"
+                f"**Checkpoint:** {checkpoint}\n"
                 f"Keys (100):\n{chr(10).join(ckpt_info['keys'][:100])}\n"
                 f"Dims:\n{json.dumps(ckpt_info['dims'], indent=2)}\n\n"
-                f"**LoRA:** {os.path.basename(lora_path)}\n"
+                f"**LoRA:** {lora}\n"
                 f"Keys (100):\n{chr(10).join(lora_info['keys'][:100])}\n"
                 f"Dims:\n{json.dumps(lora_info['dims'], indent=2)}\n\n"
                 "Responde empezando con 'COMPATIBLE: Sí' o 'COMPATIBLE: No'."
@@ -293,21 +275,111 @@ class GoogleAI_CompatibilityChecker:
         return info
 
 
+# ============================================================================
+# SUBGRUPO B: Diagnóstico de Texto/Workflow (STRING multiline + forceInput)
+# ============================================================================
+
+class GoogleAI_WorkflowAnalyzer:
+    """
+    Analiza class_type de un workflow JSON y Gemini devuelve repos de GitHub.
+    UI: Cuadro de texto manual + puerto físico text_or_file_path (forceInput).
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "workflow_json": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "JSON del workflow o ruta al archivo .json.",
+                }),
+            },
+            "optional": {
+                "api_key": ("STRING", {"default": ""}),
+                "model": (DIAG_MODELS, {"default": "gemini-3.1-pro-preview"}),
+                "text_or_file_path": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Puerto de conexión: recibe texto o ruta de archivo desde otro nodo.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("analysis_report",)
+    FUNCTION = "analyze_workflow"
+    CATEGORY = "Google AI/Diagnostic"
+
+    def analyze_workflow(self, workflow_json, api_key="",
+                         model="gemini-3.1-pro-preview", text_or_file_path=""):
+        try:
+            key = GoogleAICore.resolve_api_key(api_key)
+
+            # Prioridad: text_or_file_path > workflow_json
+            source = text_or_file_path.strip() if text_or_file_path else workflow_json
+
+            if os.path.isfile(source.strip()):
+                with open(source.strip(), "r", encoding="utf-8") as f:
+                    workflow_data = json.load(f)
+            else:
+                try:
+                    workflow_data = json.loads(source)
+                except json.JSONDecodeError:
+                    return ("❌ No es un JSON válido ni una ruta existente.",)
+
+            class_types = set()
+            if isinstance(workflow_data, dict):
+                for nid, ndata in workflow_data.items():
+                    if isinstance(ndata, dict) and "class_type" in ndata:
+                        class_types.add(ndata["class_type"])
+                for node in workflow_data.get("nodes", []):
+                    if isinstance(node, dict):
+                        ct = node.get("type", node.get("class_type", ""))
+                        if ct:
+                            class_types.add(ct)
+
+            if not class_types:
+                return ("⚠️ No se encontraron 'class_type' en el JSON.",)
+
+            sorted_ct = sorted(class_types)
+            prompt = (
+                f"Nodos ({len(sorted_ct)} tipos):\n\n"
+                + "\n".join(f"- {ct}" for ct in sorted_ct)
+            )
+            result = GoogleAICore.call_gemini_text(
+                api_key=key, prompt=prompt, model=model,
+                system_instruction=SYSTEM_PROMPT_WORKFLOW_ANALYZER,
+            )
+            return (result,)
+
+        except Exception as e:
+            logger.error(f"[WorkflowAnalyzer] Error: {e}")
+            return (f"❌ Error: {str(e)}",)
+
+
 class GoogleAI_LoRATrainingAnalyzer:
-    """Analiza logs de entrenamiento (.csv/.json) para detectar overfitting."""
+    """
+    Analiza logs de entrenamiento (.csv/.json) para detectar overfitting.
+    UI: Cuadro de texto manual + puerto físico text_or_file_path (forceInput).
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "training_logs": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "CSV/JSON de loss, o ruta al archivo.",
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "CSV/JSON de loss de entrenamiento, o ruta al archivo.",
                 }),
             },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
                 "model": (DIAG_MODELS, {"default": "gemini-3.1-pro-preview"}),
+                "text_or_file_path": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Puerto de conexión: recibe datos o ruta desde otro nodo.",
+                }),
             },
         }
 
@@ -316,13 +388,17 @@ class GoogleAI_LoRATrainingAnalyzer:
     FUNCTION = "analyze_training"
     CATEGORY = "Google AI/Diagnostic"
 
-    def analyze_training(self, training_logs, api_key="", model="gemini-3.1-pro-preview"):
+    def analyze_training(self, training_logs, api_key="",
+                         model="gemini-3.1-pro-preview", text_or_file_path=""):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            log_data = training_logs
 
-            if os.path.isfile(training_logs.strip()):
-                fp = training_logs.strip()
+            # Prioridad: text_or_file_path > training_logs
+            source = text_or_file_path.strip() if text_or_file_path else training_logs
+            log_data = source
+
+            if os.path.isfile(source.strip()):
+                fp = source.strip()
                 with open(fp, "r", encoding="utf-8") as f:
                     raw = f.read()
                 if fp.endswith(".json"):
@@ -336,12 +412,12 @@ class GoogleAI_LoRATrainingAnalyzer:
                     log_data = raw[:10000]
             else:
                 try:
-                    log_data = json.dumps(json.loads(training_logs), indent=2)[:10000]
+                    log_data = json.dumps(json.loads(source), indent=2)[:10000]
                 except (json.JSONDecodeError, TypeError):
-                    if "," in training_logs and "\n" in training_logs:
-                        log_data = self._csv_summary(training_logs)
+                    if "," in source and "\n" in source:
+                        log_data = self._csv_summary(source)
                     else:
-                        log_data = training_logs[:10000]
+                        log_data = source[:10000]
 
             if not log_data.strip():
                 return ("❌ No se proporcionaron datos de entrenamiento.",)
