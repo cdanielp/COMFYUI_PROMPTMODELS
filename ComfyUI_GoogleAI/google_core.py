@@ -498,7 +498,7 @@ class GoogleAICore:
         except Exception as e:
             raise RuntimeError(f"Error inesperado en Veo 3.1: {str(e)}") from e
 
-    # ========================================================================
+   # ========================================================================
     # GENERACIÓN DE AUDIO (Lyria 3)
     # ========================================================================
     @staticmethod
@@ -526,13 +526,16 @@ class GoogleAICore:
                 parts.append({"inlineData": {"mimeType": "image/png", "data": frame_b64}})
 
         vocal_tag = " Include vocals and singing." if include_vocals else " Instrumental only, no vocals."
-        parts.append({"text": prompt + vocal_tag})
+
+        # La API rechaza 'audioDuration' en el JSON →
+        # se inyecta la duración directamente en el texto que lee el modelo.
+        final_prompt = f"{prompt}{vocal_tag} Make the track approximately {duration_seconds} seconds long."
+        parts.append({"text": final_prompt})
 
         payload = {
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                "audioDuration": f"{duration_seconds}s",
             },
         }
 
