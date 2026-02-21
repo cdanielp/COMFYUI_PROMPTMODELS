@@ -1,10 +1,11 @@
+```markdown
 <div align="center">
 
 <img src="prompts models logo.png" alt="Prompt Models Studio" width="200"/>
 
 # 🎨 COMFYUI_PROMPTMODELS
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom%20Nodes-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-purple.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)
@@ -24,6 +25,7 @@ Desarrollado por [Prompt Models Studio](https://www.skool.com/prompt-models-stud
 ### Opción 1: Comfy Registry (Recomendado)
 ```bash
 comfy node install promptmodels
+
 ```
 
 ### Opción 2: ComfyUI Manager
@@ -31,10 +33,12 @@ comfy node install promptmodels
 Busca `PROMPTMODELS` en ComfyUI Manager e instala.
 
 ### Opción 3: Manual
+
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git
+git clone [https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git](https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git)
 pip install -r COMFYUI_PROMPTMODELS/requirements.txt
+
 ```
 
 Reinicia ComfyUI.
@@ -44,9 +48,11 @@ Reinicia ComfyUI.
 ## 📦 Nodos Incluidos
 
 | Nodo | Categoría | Descripción |
-|------|-----------|-------------|
-| **Google AI Text Generator** | 🤖 AI APIs | Generación de texto con Gemini (multimodal) |
-| **Google AI Image Generator** | 🤖 AI APIs | Generación de imágenes con Gemini/Imagen 3 |
+| --- | --- | --- |
+| **Google AI Text/Diag** | 🤖 AI APIs | Texto multimodal y diagnóstico con Gemini 3.1 Pro |
+| **Google AI Image** | 🤖 AI APIs | Generación de imágenes en batch con Imagen 3 |
+| **Google AI Video** | 🤖 AI APIs | Generación de video asíncrono con Veo 3.1 |
+| **Google AI Audio** | 🤖 AI APIs | Música (Lyria 3) y sonido Foley sincronizado |
 | **Grok Text Generator** | 🤖 AI APIs | Generación de texto con xAI Grok |
 | **Grok Image Generator** | 🤖 AI APIs | Generación de imágenes con Grok |
 | **SetNode / GetNode** | 🧠 Memoria | Sistema de caché compatible con rgthree |
@@ -62,15 +68,16 @@ Reinicia ComfyUI.
 
 ## 📖 Documentación
 
-### 🤖 ComfyUI_GoogleAI
+### 🤖 ComfyUI_GoogleAI (V2.1)
 
-Conecta ComfyUI con Google AI (Gemini API) para generación de texto e imágenes.
+Conecta ComfyUI con Google AI mediante una arquitectura 100% nativa REST (cero SDKs), garantizando máxima estabilidad. Configura tu API Key globalmente desde los Settings de ComfyUI.
 
-**Características:**
-- Soporte multimodal (imágenes, audio, video, PDFs)
-- Modelos: Gemini 3, Gemini 2.5, Imagen 3
-- Presets de resolución hasta 4K
-- Sistema de semillas para reproducibilidad
+**Características Principales:**
+
+* **Texto y Diagnóstico (Gemini 3.1 Pro):** Soporte multimodal (imágenes, video de YouTube, PDFs). Nodos especiales para diagnosticar workflows, detectar arquitecturas de Safetensors y analizar LoRAs.
+* **Imagen (Imagen 3):** Soporte de batching y sistema anti-crash (las violaciones de seguridad HTTP 400 devuelven una imagen roja de alerta en lugar de detener el workflow).
+* **Video (Veo 3.1):** Generación de video, Image-to-Video, Video Extension e interpolación de frames. **Polling asíncrono** que no bloquea ComfyUI. Salida optimizada a 24 FPS.
+* **Audio (Lyria 3):** Generación de música de 30 segundos (vocal/instrumental) y creación de sonido Foley a partir de frames de video. Los warnings de SynthID se filtran automáticamente.
 
 **Requisitos:** API Key de [Google AI Studio](https://aistudio.google.com/apikey)
 
@@ -81,10 +88,11 @@ Conecta ComfyUI con Google AI (Gemini API) para generación de texto e imágenes
 Conecta ComfyUI con xAI API (Grok) para generación de texto e imágenes.
 
 **Características:**
-- Generación de texto con Grok 4
-- Generación de imágenes con estilos
-- 12 estilos artísticos incluidos
-- Control de temperatura y tokens
+
+* Generación de texto con Grok 4
+* Generación de imágenes con estilos
+* 12 estilos artísticos incluidos
+* Control de temperatura y tokens
 
 **Requisitos:** API Key de [xAI Console](https://console.x.ai/)
 
@@ -107,9 +115,9 @@ Suite de nodos para selección múltiple, generación de latents y construcción
 Selecciona y combina hasta 12 slots de imagen + máscara.
 
 | Entrada | Opciones |
-|---------|----------|
-| `fallback` | `error` \| `slot1` |
-| `mode` | `auto` \| `single_only` \| `batch_only` |
+| --- | --- |
+| `fallback` | `error` |
+| `mode` | `auto` |
 | `img1..img12` | IMAGE |
 | `mask1..mask12` | MASK |
 | `on1..on12` | BOOLEAN |
@@ -117,9 +125,10 @@ Selecciona y combina hasta 12 slots de imagen + máscara.
 **Salidas:** `image` (IMAGE), `mask` (MASK)
 
 **Comportamiento:**
-- 1 slot activo → salida single
-- 2+ slots activos → salida batch concatenado
-- Valida que todas las imágenes tengan el mismo tamaño
+
+* 1 slot activo → salida single
+* 2+ slots activos → salida batch concatenado
+* Valida que todas las imágenes tengan el mismo tamaño
 
 ---
 
@@ -128,10 +137,10 @@ Selecciona y combina hasta 12 slots de imagen + máscara.
 Selecciona y combina hasta 12 prompts de texto.
 
 | Entrada | Opciones |
-|---------|----------|
-| `fallback` | `error` \| `p1` |
-| `join_with` | `\n\n` \| `\n` \| `\|` \| `,` |
-| `mode` | `auto` \| `single_only` \| `join_only` |
+| --- | --- |
+| `fallback` | `error` |
+| `join_with` | `\n\n` |
+| `mode` | `auto` |
 | `p1..p12` | STRING (multiline) |
 | `on1..on12` | BOOLEAN |
 
@@ -144,17 +153,17 @@ Selecciona y combina hasta 12 prompts de texto.
 Genera un latent vacío con presets predefinidos. **Un solo dropdown, sin cálculos.**
 
 | Entrada | Opciones |
-|---------|----------|
+| --- | --- |
 | `size_preset` | 29 presets (Test, Medio, Grande, Social) |
 | `batch_size` | INT (1-64) |
-| `rounding` | `auto_round` \| `strict` |
+| `rounding` | `auto_round` |
 
 **Salidas:** `latent` (LATENT)
 
 **Presets incluidos:**
 
 | Categoría | Ratios disponibles |
-|-----------|-------------------|
+| --- | --- |
 | **Test** (256 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
 | **Medio** (512 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
 | **Grande** (1024 base) | 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 3:2, 2:1, 21:9 |
@@ -167,21 +176,22 @@ Genera un latent vacío con presets predefinidos. **Un solo dropdown, sin cálcu
 Constructor de prompts por campos con 10 diseños predefinidos. Solo requiere **👤 Sujeto**, todo lo demás es opcional.
 
 **Diseños disponibles:**
-- Retrato Pro
-- Cinemático
-- Producto E-commerce
-- Anime Clean
-- Concept Art
-- Arquitectura
-- Moda Editorial
-- Interior Design
-- Vertical Reels (9:16)
-- Thumbnail YouTube (16:9)
+
+* Retrato Pro
+* Cinemático
+* Producto E-commerce
+* Anime Clean
+* Concept Art
+* Arquitectura
+* Moda Editorial
+* Interior Design
+* Vertical Reels (9:16)
+* Thumbnail YouTube (16:9)
 
 **Campos disponibles:**
 
 | Campo | Emoji | Obligatorio |
-|-------|-------|-------------|
+| --- | --- | --- |
 | Sujeto | 👤 | ✅ Sí |
 | Acción / Pose | 🧍 | No |
 | Emoción / Expresión | 🎭 | No |
@@ -200,10 +210,11 @@ Constructor de prompts por campos con 10 diseños predefinidos. Solo requiere **
 | Extra | ➕ | No |
 
 **Opciones globales:**
-- `🔗 Separador`: `, ` | ` ` | `\n` | ` | `
-- `📌 Prefijo` / `📌 Sufijo`: Texto adicional
-- `🧹 Normalizar`: Limpia espacios y comas duplicadas
-- `🧼 Evitar duplicados`: Elimina frases repetidas
+
+* `🔗 Separador`: `, ` | `     ` | `\n` | `|`
+* `📌 Prefijo` / `📌 Sufijo`: Texto adicional
+* `🧹 Normalizar`: Limpia espacios y comas duplicadas
+* `🧼 Evitar duplicados`: Elimina frases repetidas
 
 **Salidas:** `text` (STRING)
 
@@ -236,7 +247,7 @@ Nodo de seguridad que analiza y filtra prompts con palabras prohibidas.
 ## 🔑 API Keys Requeridas
 
 | Nodo | Proveedor | Obtener Key |
-|------|-----------|-------------|
+| --- | --- | --- |
 | Google AI | Google | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | Grok | xAI | [console.x.ai](https://console.x.ai/) |
 
@@ -247,7 +258,7 @@ Nodo de seguridad que analiza y filtra prompts con palabras prohibidas.
 ## 📋 Requisitos
 
 | Componente | Versión |
-|------------|---------|
+| --- | --- |
 | ComfyUI | >= 0.3.76 |
 | Python | >= 3.10 |
 | PyTorch | >= 2.0 |
@@ -262,15 +273,19 @@ MIT License - Libre para uso personal y comercial.
 
 ## 💬 Soporte
 
-- **GitHub Issues:** [Reportar problema](https://github.com/cdanielp/COMFYUI_PROMPTMODELS/issues)
-- **Comunidad:** [Prompt Models Studio en Skool](https://www.skool.com/prompt-models-studio)
+* **GitHub Issues:** [Reportar problema](https://github.com/cdanielp/COMFYUI_PROMPTMODELS/issues)
+* **Comunidad:** [Prompt Models Studio en Skool](https://www.skool.com/prompt-models-studio)
 
 ---
 
 <div align="center">
 
-**Hecho con ❤️ en México por [Prompt Models Studio](https://www.skool.com/prompt-models-studio)**
+**Hecho con ❤️ en México por [Prompt Models Studio**](https://www.skool.com/prompt-models-studio)
 
 ⭐ Si te fue útil, regálanos una estrella en GitHub
 
 </div>
+
+```
+
+```
