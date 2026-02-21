@@ -1,8 +1,13 @@
 """
-google_core.py - Motor Central de la API de Google AI (V2.2)
+google_core.py - Motor Central de la API de Google AI (V2.3)
 ============================================================
 Maneja TODAS las comunicaciones HTTP con la API REST de Google.
 Regla de Oro: CERO SDKs. Solo requests puras (+ aiohttp para video async).
+
+V2.3 Cambios:
+  - generate_video → formato estructurado instances/parameters (Vertex/Veo)
+  - Polling URL corregida con normalización de operation_name
+  - Extracción de video soporta bytesBase64Encoded, URI e inlineData
 
 V2.2 Cambios:
   - video_bytes_to_audio() → extrae audio de MP4 con fallback silencio
@@ -103,7 +108,7 @@ class GoogleAICore:
     """
     Motor central para todas las comunicaciones con la API de Google AI.
     Usa EXCLUSIVAMENTE requests HTTP puras. CERO SDKs.
-    Video: polling asíncrono con aiohttp (V2.1).
+    Video: polling asíncrono con aiohttp (V2.3).
     """
 
     # ========================================================================
@@ -325,7 +330,7 @@ class GoogleAICore:
             )
 
     # ========================================================================
-    # GENERACIÓN DE VIDEO (Veo 3.1) — Polling Asíncrono (V2.1)
+    # GENERACIÓN DE VIDEO (Veo 3.1) — Polling Asíncrono (V2.3)
     # ========================================================================
     @staticmethod
     async def generate_video(
@@ -342,46 +347,65 @@ class GoogleAICore:
     ) -> bytes:
         """
         Genera video usando Veo 3.1 con polling asíncrono no bloqueante.
-        Usa aiohttp + asyncio.sleep para no bloquear el event loop de ComfyUI.
+        Usa el formato estructurado (instances / parameters) de Vertex AI.
         Retorna bytes MP4.
         """
         url = VEO_PREDICT_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
 
-        # Parsear resolución
-        if resolution_preset in VEO_RESOLUTION_PRESETS:
-            width, height = VEO_RESOLUTION_PRESETS[resolution_preset]
-        else:
-            width, height = 1920, 1080
+        # Parsear resolución y aspecto para los parameters
+        aspect_ratio = "16:9"
+        api_resolution = "1080p"
 
-        # Construir payload
-        instances_parts = [{"text": prompt}]
+        if "9:16" in resolution_preset:
+            aspect_ratio = "9:16"
+        elif "1:1" in resolution_preset:
+            aspect_ratio = "1:1"
 
-        if init_images_b64:
-            for img_b64 in init_images_b64:
-                instances_parts.append({
-                    "inlineData": {"mimeType": "image/png", "data": img_b64}
-                })
+        if "4K" in resolution_preset:
+            api_resolution = "4k"
+        elif "1080" in resolution_preset:
+            api_resolution = "1080p"
+        elif "720" in resolution_preset:
+            api_resolution = "720p"
 
+        # Construir instancia en formato Vertex/Veo
+        instance = {
+            "prompt": prompt
+        }
+
+        # 1. Imagen inicial (Img2Vid)
+        if init_images_b64 and len(init_images_b64) > 0:
+            instance["image"] = {
+                "mimeType": "image/png",
+                "bytesBase64Encoded": init_images_b64[0]
+            }
+
+        # 2. Último frame (Interpolación)
         if last_frame_b64:
-            instances_parts.append({
-                "inlineData": {"mimeType": "image/png", "data": last_frame_b64}
-            })
+            instance["lastFrame"] = {
+                "mimeType": "image/png",
+                "bytesBase64Encoded": last_frame_b64
+            }
 
+        # 3. Imágenes de referencia (Storyboard)
         if reference_images_b64:
+            refs = []
             for ref_b64 in reference_images_b64:
-                instances_parts.append({
-                    "inlineData": {"mimeType": "image/png", "data": ref_b64}
+                refs.append({
+                    "mimeType": "image/png",
+                    "bytesBase64Encoded": ref_b64
                 })
+            instance["referenceImages"] = refs
 
         payload = {
-            "contents": [{"parts": instances_parts}],
-            "generationConfig": {
-                "responseModalities": ["VIDEO"],
-                "resolution": f"{width}x{height}",
-                "videoDuration": f"{duration_seconds}s",
-            },
+            "instances": [instance],
+            "parameters": {
+                "aspectRatio": aspect_ratio,
+                "resolution": api_resolution,
+                "durationSeconds": int(duration_seconds),
+            }
         }
 
         try:
@@ -412,13 +436,17 @@ class GoogleAICore:
 
                 logger.info(f"[Veo 3.1] Operación iniciada: {operation_name}")
 
+                # Asegurar formato correcto de URL de polling
+                if not operation_name.startswith("operations/"):
+                    operation_name = f"operations/{operation_name}"
+
                 # 2. Polling asíncrono (no bloquea el event loop de ComfyUI)
                 elapsed = 0
                 while elapsed < max_wait:
                     await asyncio.sleep(poll_interval)
                     elapsed += poll_interval
 
-                    poll_url = f"{GEMINI_BASE_URL}/operations/{operation_name}?key={api_key}"
+                    poll_url = f"{GEMINI_BASE_URL}/{operation_name}?key={api_key}"
                     async with session.get(poll_url) as poll_resp:
                         if not poll_resp.ok:
                             err_text = await poll_resp.text()
@@ -434,28 +462,34 @@ class GoogleAICore:
                     if poll_data.get("done", False):
                         result = poll_data.get("response", {})
 
-                        # Intentar inlineData
+                        # Extraer video — soporta bytesBase64Encoded, URI e inlineData
+                        generated = result.get("generatedVideos", [])
+                        if generated:
+                            vid_obj = generated[0].get("video", {})
+
+                            if "bytesBase64Encoded" in vid_obj:
+                                logger.info(f"[Veo 3.1] ✅ Video recibido (Base64) en {elapsed}s")
+                                return base64.b64decode(vid_obj["bytesBase64Encoded"])
+
+                            video_uri = vid_obj.get("uri", "")
+                            if video_uri:
+                                async with session.get(f"{video_uri}&key={api_key}") as vid_resp:
+                                    if vid_resp.ok:
+                                        logger.info(f"[Veo 3.1] ✅ Video recibido (URI) en {elapsed}s")
+                                        return await vid_resp.read()
+
+                        # Fallback formato tradicional (inlineData)
                         for cand in result.get("candidates", []):
                             for part in cand.get("content", {}).get("parts", []):
                                 if "inlineData" in part:
                                     logger.info(f"[Veo 3.1] ✅ Video recibido (inlineData) en {elapsed}s")
                                     return base64.b64decode(part["inlineData"]["data"])
 
-                        # Intentar videoUri
-                        generated = result.get("generatedVideos", [])
-                        if generated:
-                            video_uri = generated[0].get("video", {}).get("uri", "")
-                            if video_uri:
-                                async with session.get(f"{video_uri}&key={api_key}") as vid_resp:
-                                    if vid_resp.ok:
-                                        logger.info(f"[Veo 3.1] ✅ Video recibido (videoUri) en {elapsed}s")
-                                        return await vid_resp.read()
-
-                        raise RuntimeError("Operación finalizada pero no se encontró video.")
+                        raise RuntimeError("Operación finalizada pero no se encontró video en la respuesta.")
 
                     metadata = poll_data.get("metadata", {})
                     progress = metadata.get("progress", "desconocido")
-                    logger.info(f"[Veo 3.1] Generando... Progreso: {progress} | {elapsed}s/{max_wait}s")
+                    logger.info(f"[Veo 3.1] Generando... Progreso: {progress}% | {elapsed}s/{max_wait}s")
 
                 raise RuntimeError(f"Timeout: La generación excedió {max_wait}s.")
 
