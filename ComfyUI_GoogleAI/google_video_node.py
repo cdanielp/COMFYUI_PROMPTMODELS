@@ -1,8 +1,14 @@
 """
-google_video_node.py - Nodos de Video para ComfyUI (V2.1)
+google_video_node.py - Nodos de Video para ComfyUI (V2.2)
 ==========================================================
 Veo 3.1 | Cascada Async (todas las FUNCTION son async def)
 ⚡ FPS de salida: 24. Configurar VHS Video Combine a 24 FPS.
+
+V2.2 Cambios:
+  - RETURN_TYPES/NAMES incluye AUDIO entre IMAGE y STRING
+  - Nuevo método GoogleAICore.video_bytes_to_audio() con fallback silencio
+  - Todos los return exitosos → (video_tensor, audio_dict, cost_str)
+  - Todos los return en except → (error_image, dummy_audio, cost_str)
 
 V2.1 Cambios:
   - Todas las funciones FUNCTION → async def + await (cascada async)
@@ -24,6 +30,8 @@ logger = logging.getLogger("ComfyUI_GoogleAI")
 RESOLUTION_OPTIONS = list(VEO_RESOLUTION_PRESETS.keys())
 DURATION_OPTIONS = [str(d) for d in VEO_DURATION_OPTIONS]
 VIDEO_MODELS = ["veo-3.1", "veo-3.0-generate-preview", "veo-2.0-generate-001"]
+
+_DUMMY_AUDIO = {"waveform": torch.zeros((1, 2, 44100)), "sample_rate": 44100}
 
 
 class GoogleAI_VideoGenerator:
@@ -54,8 +62,8 @@ class GoogleAI_VideoGenerator:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "generate_video"
     CATEGORY = "Google AI/Video"
 
@@ -80,7 +88,6 @@ class GoogleAI_VideoGenerator:
             if negative_prompt:
                 full_prompt += f"\n\nNegative: {negative_prompt}"
 
-            # await al core asíncrono
             video_bytes = await GoogleAICore.generate_video(
                 api_key=key,
                 prompt=full_prompt,
@@ -91,6 +98,7 @@ class GoogleAI_VideoGenerator:
             )
 
             video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+            audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
             logger.info(
                 f"[VideoGenerator] ✅ {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}"
             )
@@ -98,7 +106,7 @@ class GoogleAI_VideoGenerator:
                 "[Veo 3.1] ⚠️ IMPORTANTE: El video tiene un estándar de 24 FPS. "
                 "Configura tu VHS Video Combine a 24 FPS."
             )
-            return (video_tensor, cost_str,)
+            return (video_tensor, audio_dict, cost_str,)
 
         except RuntimeError as e:
             error_msg = str(e)
@@ -108,6 +116,7 @@ class GoogleAI_VideoGenerator:
                 logger.error(f"[VideoGenerator] Error: {error_msg}")
             return (
                 GoogleAICore.create_error_image(error_msg),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",
             )
 
@@ -115,6 +124,7 @@ class GoogleAI_VideoGenerator:
             logger.error(f"[VideoGenerator] Error inesperado: {e}")
             return (
                 GoogleAICore.create_error_image(str(e)),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",
             )
 
@@ -146,8 +156,8 @@ class GoogleAI_VideoInterpolation:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "interpolate"
     CATEGORY = "Google AI/Video"
 
@@ -162,7 +172,6 @@ class GoogleAI_VideoInterpolation:
             first_b64 = GoogleAICore.tensor_to_base64(first_frame, 0)
             last_b64 = GoogleAICore.tensor_to_base64(last_resized, 0)
 
-            # await al core asíncrono
             video_bytes = await GoogleAICore.generate_video(
                 api_key=key,
                 prompt=prompt,
@@ -174,6 +183,7 @@ class GoogleAI_VideoInterpolation:
             )
 
             video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+            audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
             logger.info(
                 f"[VideoInterpolation] ✅ {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}"
             )
@@ -181,7 +191,7 @@ class GoogleAI_VideoInterpolation:
                 "[Veo 3.1] ⚠️ IMPORTANTE: El video tiene un estándar de 24 FPS. "
                 "Configura tu VHS Video Combine a 24 FPS."
             )
-            return (video_tensor, cost_str,)
+            return (video_tensor, audio_dict, cost_str,)
 
         except RuntimeError as e:
             error_msg = str(e)
@@ -191,6 +201,7 @@ class GoogleAI_VideoInterpolation:
                 logger.error(f"[VideoInterpolation] Error: {error_msg}")
             return (
                 GoogleAICore.create_error_image(error_msg),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",
             )
 
@@ -198,6 +209,7 @@ class GoogleAI_VideoInterpolation:
             logger.error(f"[VideoInterpolation] Error inesperado: {e}")
             return (
                 GoogleAICore.create_error_image(str(e)),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",
             )
 
@@ -231,8 +243,8 @@ class GoogleAI_VideoStoryboard:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "generate_storyboard"
     CATEGORY = "Google AI/Video"
 
@@ -249,14 +261,12 @@ class GoogleAI_VideoStoryboard:
                     ref_b64_list.append(GoogleAICore.tensor_to_base64(ref_img, 0))
                     logger.info(f"[Storyboard] Referencia {idx} adjunta")
 
-            # Regla: con referencias → forzar 8s
             if ref_b64_list and duration != 8:
                 logger.warning(f"[Storyboard] Duración forzada {duration}s → 8s (restricción API con referencias)")
                 duration = 8
 
             cost_str = GoogleAICore.estimate_video_cost(duration)
 
-            # await al core asíncrono
             video_bytes = await GoogleAICore.generate_video(
                 api_key=key,
                 prompt=prompt,
@@ -267,6 +277,7 @@ class GoogleAI_VideoStoryboard:
             )
 
             video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+            audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
             logger.info(
                 f"[Storyboard] ✅ {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}"
             )
@@ -274,17 +285,18 @@ class GoogleAI_VideoStoryboard:
                 "[Veo 3.1] ⚠️ IMPORTANTE: El video tiene un estándar de 24 FPS. "
                 "Configura tu VHS Video Combine a 24 FPS."
             )
-            return (video_tensor, cost_str,)
+            return (video_tensor, audio_dict, cost_str,)
 
         except RuntimeError as e:
             error_msg = str(e)
+            d = 8 if reference_image_1 else int(duration_seconds)
             if "400" in error_msg or "safety" in error_msg.lower() or "block" in error_msg.lower():
                 logger.warning(f"[Storyboard] Violación de seguridad: {error_msg}")
             else:
                 logger.error(f"[Storyboard] Error: {error_msg}")
-            d = 8 if reference_image_1 else int(duration_seconds)
             return (
                 GoogleAICore.create_error_image(error_msg),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(d)}",
             )
 
@@ -293,5 +305,6 @@ class GoogleAI_VideoStoryboard:
             d = 8 if reference_image_1 else int(duration_seconds)
             return (
                 GoogleAICore.create_error_image(str(e)),
+                _DUMMY_AUDIO,
                 f"❌ Error - {GoogleAICore.estimate_video_cost(d)}",
             )
