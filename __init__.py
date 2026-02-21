@@ -105,9 +105,12 @@ except Exception as e:
     print(f"{RED}[Selectores Pro] ⚠️ Failed: {e}{RESET}")
 
 # ============================================================
-#  LOG FINAL
+#  LOG FINAL Y EXPORTACIONES DE COMFYUI
 # ============================================================
 print(f"{YELLOW}[PromptModels Studio] 📦 Total nodes loaded: {len(NODE_CLASS_MAPPINGS)}{RESET}")
 print(f"{GREEN}[PromptModels Studio] ✅ Ready!{RESET}")
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+# 🔥 AGREGADO: Ruta al frontend para que ComfyUI cargue la UI y la API Key global
+WEB_DIRECTORY = "./ComfyUI_GoogleAI/web"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
