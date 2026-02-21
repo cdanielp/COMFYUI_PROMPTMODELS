@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"  # Incrementado por la nueva integración
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
@@ -80,6 +80,7 @@ except Exception as e:
     print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
 # --- ComfyUI-Grok (xAI) ---
+# Se encarga de cargar los sub-nodos (grok_text_node y grok_image_node)
 try:
     from .ComfyUI_Grok import (
         NODE_CLASS_MAPPINGS as GROK_CLASS,
@@ -87,7 +88,7 @@ try:
     )
     NODE_CLASS_MAPPINGS.update(GROK_CLASS)
     NODE_DISPLAY_NAME_MAPPINGS.update(GROK_NAMES)
-    print(f"{GREEN}[ComfyUI-Grok] ✅ Loaded{RESET}")
+    print(f"{GREEN}[ComfyUI-Grok] ✅ Loaded (xAI Integration){RESET}")
 except Exception as e:
     print(f"{RED}[ComfyUI-Grok] ⚠️ Failed: {e}{RESET}")
 
