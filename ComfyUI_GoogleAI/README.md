@@ -1,102 +1,172 @@
-# ComfyUI-GoogleAI
+# 🚀 ComfyUI_GoogleAI V2.0 — Suite Integral de Google AI
 
-Custom nodes for ComfyUI that connect to Google AI (Gemini API) for text and image generation.
+> **Gemini 3.1 Pro** (Texto/Diagnóstico) · **Imagen 3** (Imágenes) · **Veo 3.1** (Video) · **Lyria 3** (Audio)
 
-**Actualizado: Diciembre 2025** - Incluye Gemini 3, Nano Banana Pro, entradas multimodales
+![Version](https://img.shields.io/badge/Version-2.0.0-blue)
+![Nodes](https://img.shields.io/badge/Nodos-14-green)
 
-## 🚀 Installation
+---
+
+## 📑 Tabla de Contenidos
+
+1. [Instalación](#-instalación)
+2. [Configurar API Key](#-configurar-api-key)
+3. [Nodos: Texto](#-texto--gemini-31-pro)
+4. [Nodos: Imagen](#-imagen--imagen-3)
+5. [Nodos: Video](#-video--veo-31)
+6. [Nodos: Audio](#-audio--lyria-3)
+7. [Nodos: Diagnóstico](#-diagnóstico--gemini-31-pro)
+8. [Notas Técnicas](#-notas-técnicas)
+
+---
+
+## 📦 Instalación
 
 ```bash
 cd ComfyUI/custom_nodes/
-unzip ComfyUI_GoogleAI.zip
-pip install -r ComfyUI_GoogleAI/requirements.txt
+git clone https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git ComfyUI_GoogleAI
+cd ComfyUI_GoogleAI
+pip install -r requirements.txt
 ```
 
-Restart ComfyUI.
+> 💡 **Explicador de Errores:** Fue separado al plugin universal [ComfyUI_UniversalErrorExplainer](https://github.com/cdanielp/ComfyUI_UniversalErrorExplainer). Compatible con Gemini, OpenAI, Anthropic y Ollama.
 
-## 🔑 API Key
+---
 
-Get your API key from [Google AI Studio](https://aistudio.google.com/apikey)
+## 🔑 Configurar API Key
 
-## 📦 Available Nodes
+| Prioridad | Fuente | Cómo |
+|:---------:|--------|------|
+| 1️⃣ | Campo del nodo | Escribir directo en `api_key` |
+| 2️⃣ | Settings (UI) | ⚙️ > **Google AI API Key (Gemini)** |
+| 3️⃣ | Variable de entorno | `export GOOGLE_AI_API_KEY="..."` |
 
-### 🧠 Google AI Text Generator
+---
 
-Nodo multimodal de generación de texto con soporte para imágenes, audio, video y archivos.
+## 🔤 Texto — Gemini 3.1 Pro
 
-| Input | Type | Description |
-|-------|------|-------------|
-| **images** | IMAGE (optional) | Imágenes para análisis |
-| **audio** | AUDIO (optional) | Audio para transcripción/análisis |
-| **video** | IMAGE (optional) | Frames de video |
-| **files** | STRING (optional) | Base64 de PDFs u otros archivos |
-| api_key | STRING | Your Google AI API key |
-| prompt | STRING | Main prompt text |
-| model | DROPDOWN | Select from available text models |
-| seed | INT | Seed for reproducibility |
-| randomize_seed | BOOLEAN | Generate random seed each run |
-| system_prompt | STRING | System instructions |
-| temperature | FLOAT | Creativity (0.0-2.0) |
+### GoogleAI_TextNode
+| Input | Tipo | Req | Descripción |
+|-------|------|:---:|-------------|
+| `prompt` | STRING | ✅ | Prompt de texto |
+| `model` | COMBO | ✅ | gemini-3.1-pro-preview, etc. |
+| `thinking_budget` | COMBO | ✅ | Off / Low (1024) / High (8192) |
+| `api_key` | STRING | ❌ | Opcional si usas Settings |
+| `system_prompt` | STRING | ❌ | Instrucción de sistema |
+| `image` | IMAGE | ❌ | Análisis multimodal |
+| `youtube_url` | STRING | ❌ | URL de YouTube |
+| `max_tokens` | INT | ❌ | 64-65536 |
+| `temperature` | FLOAT | ❌ | 0.0-2.0 |
+| **Output** | `text` STRING | | |
 
-**Output:** `text` (STRING)
+### GoogleAI_TextVisionNode
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `image` | IMAGE | ✅ |
+| `prompt` | STRING | ✅ |
+| **Output** | `analysis` STRING | |
 
-### 🎨 Google AI Image Generator
+---
 
-Nodo de generación de imagen con presets de tamaño estilo Seedream.
+## 🎨 Imagen — Imagen 3
 
-| Input | Type | Description |
-|-------|------|-------------|
-| **image_1-5** | IMAGE (optional) | Reference images |
-| api_key | STRING | Your Google AI API key |
-| model | DROPDOWN | Select from available image models |
-| prompt | STRING | Image description prompt |
-| system_prompt | STRING | Style instructions |
-| size_preset | DROPDOWN | Predefined sizes "2048×2048 (1:1) - 2K" |
-| seed | INT | Seed for reproducibility |
-| randomize_seed | BOOLEAN | Generate random seed |
-| response_mode | DROPDOWN | IMAGE+TEXT or IMAGE |
+### GoogleAI_ImageNode
+Error HTTP 400 (seguridad) → retorna imagen roja 512×512 sin crashear.
 
-**Output:** `image` (IMAGE)
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `prompt` | STRING | ✅ |
+| `model` | COMBO | ✅ |
+| `aspect_ratio` | COMBO | ✅ |
+| `negative_prompt` | STRING | ❌ |
+| **Output** | `image` IMAGE | |
 
-## 📐 Size Presets
+### GoogleAI_ImageBatchNode
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `batch_size` | INT (1-4) | ✅ |
+| **Output** | `images` IMAGE (batch) | |
 
-### 1K (~1024px)
-- 1024×1024 (1:1)
-- 1152×896 (4:3)
-- 896×1152 (3:4)
-- 1280×720 (16:9)
-- 720×1280 (9:16)
+---
 
-### 2K (~2048px)
-- 2048×2048 (1:1)
-- 2304×1728 (4:3)
-- 2560×1440 (16:9)
-- 1440×2560 (9:16)
+## 🎬 Video — Veo 3.1
 
-### 4K (~4096px) - Solo Nano Banana Pro
-- 4096×4096 (1:1)
-- 4608×3456 (4:3)
-- 5120×2880 (16:9)
+> ⚡ **FPS de salida: 24.** Configura VHS Video Combine a **24 FPS**.
 
-## 🎯 Models
+**Resoluciones:** 1920×1080, 1080×1920, 1080×1080, 3840×2160, 2160×3840  
+**Duraciones:** 4, 6, 8 segundos | **Costo:** $0.05 USD/segundo
 
-### Text Models
-| Model | Description |
-|-------|-------------|
-| `gemini-3-pro-preview` | Más avanzado |
-| `gemini-3-flash-preview` | Pro-level rápido |
-| `gemini-2.5-pro` | Razonamiento |
-| `gemini-2.5-flash` | Balance |
+### GoogleAI_VideoGenerator
+1 frame → Image-to-Video | >1 frame → Video Extension (último frame)
 
-### Image Models
-| Model | Max Res | Description |
-|-------|---------|-------------|
-| `gemini-3-pro-image-preview` | 4K | Nano Banana Pro |
-| `gemini-2.5-flash-image` | 2K | Nano Banana |
-| `imagen-3.0-generate-002` | 1K | Imagen 3 |
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `prompt` | STRING | ✅ |
+| `video_preset` | COMBO | ✅ |
+| `duration_seconds` | COMBO | ✅ |
+| `init_image_or_video` | IMAGE | ❌ |
+| **Outputs** | `video_frames` IMAGE, `cost_estimate` STRING | |
 
-## 🔗 Resources
+### GoogleAI_VideoInterpolation
+`last_frame` se redimensiona automáticamente al tamaño de `first_frame`.
 
-- [Google AI Studio](https://aistudio.google.com/)
-- [Gemini API Docs](https://ai.google.dev/gemini-api/docs)
-- [Image Generation](https://ai.google.dev/gemini-api/docs/image-generation)
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `first_frame` | IMAGE | ✅ |
+| `last_frame` | IMAGE | ✅ |
+| **Outputs** | `video_frames` IMAGE, `cost_estimate` STRING | |
+
+### GoogleAI_VideoStoryboard
+⚠️ Con imágenes de referencia → duración forzada a **8 segundos**.
+
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `reference_image_1/2/3` | IMAGE | ❌ |
+| **Outputs** | `video_frames` IMAGE, `cost_estimate` STRING | |
+
+---
+
+## 🎵 Audio — Lyria 3
+
+SynthID warnings se filtran automáticamente.
+
+### GoogleAI_MusicDirector
+| Input | Tipo | Req | Descripción |
+|-------|------|:---:|-------------|
+| `prompt` | STRING | ✅ | Descripción de la música |
+| `vocals` | BOOL | ✅ | True=voces, False=instrumental |
+| `init_image` | IMAGE | ❌ | Referencia contextual |
+| **Output** | `audio` AUDIO (30s) | | |
+
+### GoogleAI_FoleyGenerator
+| Input | Tipo | Req |
+|-------|------|:---:|
+| `video_frames` | IMAGE | ✅ |
+| `prompt` | STRING | ✅ |
+| `max_frames_to_send` | INT | ❌ |
+| **Output** | `foley_audio` AUDIO | |
+
+---
+
+## 🔍 Diagnóstico — Gemini 3.1 Pro
+
+| Nodo | Entrada | Salida |
+|------|---------|--------|
+| **ArchitectureDetector** | `safetensors_path` | `architecture_report` STRING |
+| **TriggerWordExtractor** | `lora_path` | `trigger_words` STRING |
+| **WorkflowAnalyzer** | `workflow_json` | `analysis_report` STRING |
+| **CompatibilityChecker** | `checkpoint_path` + `lora_path` | `is_compatible` BOOL + `report` STRING |
+| **LoRATrainingAnalyzer** | `training_logs` (CSV/JSON) | `diagnosis_report` STRING |
+
+---
+
+## 📝 Notas Técnicas
+
+- **Cero SDKs** — Todo usa `requests` HTTP puras
+- **Tensores estándar** — `[B, H, W, C]` float `0.0-1.0`
+- **Video 24 FPS** — Configurar en VHS Video Combine
+- **Retrocompatible** — Clases originales intactas
+
+---
+
+Desarrollado por **[Prompt Models Studio](https://github.com/cdanielp)** 🇲🇽

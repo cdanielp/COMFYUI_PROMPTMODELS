@@ -1,273 +1,653 @@
-# google_core.py
+"""
+google_core.py - Motor Central de la API de Google AI (V2.0)
+============================================================
+Maneja TODAS las comunicaciones HTTP con la API REST de Google.
+Regla de Oro: CERO SDKs. Solo requests puras.
+
+Autor: Prompt Models Studio | cdanielp
+"""
+
 import requests
 import base64
-import random
-from io import BytesIO
-from PIL import Image
+import json
+import io
+import os
+import tempfile
+import time
+import logging
+from typing import Optional, Dict, Any, List, Tuple, Union
 
-BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+import torch
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger("ComfyUI_GoogleAI")
+
+# ============================================================================
+# CONSTANTES DE LA API
+# ============================================================================
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_MODELS_ENDPOINT = "{base}/models/{model}:generateContent?key={key}"
+
+# Veo 3.1 - Video Generation (API asíncrona con polling)
+VEO_PREDICT_ENDPOINT = "{base}/models/{model}:predictLongRunning?key={key}"
+
+# Modelos por defecto
+DEFAULT_TEXT_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_IMAGE_MODEL = "imagen-3.0-generate-002"
+DEFAULT_VIDEO_MODEL = "veo-3.1"
+DEFAULT_AUDIO_MODEL = "lyria-3"
+
+# Costo estimado de video por segundo (USD)
+VIDEO_COST_PER_SECOND = 0.05
+
+# Presets de resolución para Veo 3.1
+VEO_RESOLUTION_PRESETS = {
+    "1920x1080 (16:9)": (1920, 1080),
+    "1080x1920 (9:16)": (1080, 1920),
+    "1080x1080 (1:1)": (1080, 1080),
+    "3840x2160 (16:9 4K)": (3840, 2160),
+    "2160x3840 (9:16 4K)": (2160, 3840),
+}
+
+# Duraciones permitidas para video (segundos)
+VEO_DURATION_OPTIONS = [4, 6, 8]
+
+# ============================================================================
+# SYSTEM PROMPTS HARDCODED (Solo Diagnóstico — Error Explainer fue movido)
+# ============================================================================
+SYSTEM_PROMPT_ARCHITECTURE_DETECTOR = (
+    "Eres un experto en modelos de difusión. Analiza estos keys de un archivo "
+    ".safetensors y determina la arquitectura exacta del modelo: Flux, SDXL, "
+    "SD 1.5, SD 3, Pony, etc. Explica brevemente cómo lo determinaste."
+)
+
+SYSTEM_PROMPT_TRIGGER_EXTRACTOR = (
+    "Formatea las siguientes tags de frecuencia de un LoRA de Stable Diffusion "
+    "en una cadena limpia de trigger words separadas por comas. Ordénalas por "
+    "frecuencia descendente. Solo devuelve la cadena de texto, sin explicaciones."
+)
+
+SYSTEM_PROMPT_WORKFLOW_ANALYZER = (
+    "Analiza las keys 'class_type' de este JSON de ComfyUI. "
+    "Enumera el repositorio exacto de GitHub para instalar cada custom node. "
+    "Advierte explícitamente si hay nodos con múltiples forks conflictivos "
+    "(ej. IP-Adapter)."
+)
+
+SYSTEM_PROMPT_COMPATIBILITY_CHECKER = (
+    "Analiza las dimensiones de tensores de un modelo checkpoint y un LoRA. "
+    "Determina si son compatibles (ej. ambos SD 1.5, ambos SDXL, etc.). "
+    "Explica la compatibilidad en español simple."
+)
+
+SYSTEM_PROMPT_TRAINING_ANALYZER = (
+    "Eres un experto en entrenamiento de modelos de IA. Analiza estos datos de "
+    "loss de entrenamiento. Evalúa si hay señales de sobreentrenamiento (overfitting) "
+    "comparando los valores de epoch y loss. Da un diagnóstico claro en español "
+    "con recomendaciones concretas."
+)
 
 
 class GoogleAICore:
-    def __init__(self, api_key: str, model: str):
-        self.api_key = api_key
-        self.model = model
+    """
+    Motor central para todas las comunicaciones con la API de Google AI.
+    Usa EXCLUSIVAMENTE requests HTTP puras. CERO SDKs.
+    """
 
-    def generate_text(self, prompt: str, system_prompt: str = "", temperature: float = 1.0,
-                      images: list = None, audio_data: list = None, video_data: list = None,
-                      file_data: list = None, seed: int = 0):
+    # ========================================================================
+    # RESOLUCIÓN DE API KEY (Orden de prioridad)
+    # ========================================================================
+    @staticmethod
+    def resolve_api_key(node_key: str = "") -> str:
         """
-        Genera texto usando Gemini API con soporte multimodal
-        
-        Args:
-            prompt: Texto del prompt
-            system_prompt: Instrucciones del sistema
-            temperature: Creatividad (0.0-2.0)
-            images: Lista de imágenes en base64
-            audio_data: Lista de audio en base64 con mime_type
-            video_data: Lista de video en base64 con mime_type
-            file_data: Lista de archivos en base64 con mime_type
-            seed: Semilla para reproducibilidad
+        Busca la API Key en orden estricto:
+        1. Campo api_key del nodo (el usuario escribió algo)
+        2. Clave inyectada por el frontend JS (llega al mismo campo del nodo)
+        3. Variable de entorno GOOGLE_AI_API_KEY
+        4. ValueError si no hay nada
         """
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
+        # Prioridad 1 y 2: Campo del nodo (ya incluye inyección del JS)
+        if node_key and node_key.strip():
+            return node_key.strip()
 
+        # Prioridad 3: Variable de entorno
+        env_key = os.environ.get("GOOGLE_AI_API_KEY", "").strip()
+        if env_key:
+            return env_key
+
+        # Prioridad 4: Error limpio
+        raise ValueError(
+            "❌ API Key no encontrada. Configúrala en:\n"
+            "  1. El campo 'api_key' del nodo, O\n"
+            "  2. Los Ajustes de ComfyUI (⚙️ > Google AI API Key), O\n"
+            "  3. La variable de entorno GOOGLE_AI_API_KEY"
+        )
+
+    # ========================================================================
+    # PETICIONES HTTP CENTRALES
+    # ========================================================================
+    @staticmethod
+    def _build_url(model: str, key: str, endpoint_template: str = None) -> str:
+        """Construye la URL completa de la API."""
+        if endpoint_template is None:
+            endpoint_template = GEMINI_MODELS_ENDPOINT
+        return endpoint_template.format(
+            base=GEMINI_BASE_URL, model=model, key=key
+        )
+
+    @staticmethod
+    def call_gemini(
+        api_key: str,
+        model: str,
+        contents: List[Dict],
+        system_instruction: Optional[str] = None,
+        generation_config: Optional[Dict] = None,
+        timeout: int = 120,
+    ) -> Dict[str, Any]:
+        """
+        Llamada genérica a la API de Gemini (generateContent).
+        Retorna el JSON de respuesta completo.
+        """
+        url = GoogleAICore._build_url(model, api_key)
+        payload: Dict[str, Any] = {"contents": contents}
+
+        if system_instruction:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=timeout
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response else "N/A"
+            error_body = ""
+            try:
+                error_body = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                error_body = e.response.text[:500] if e.response else ""
+            raise RuntimeError(
+                f"Error HTTP {status_code} de la API de Gemini:\n{error_body}"
+            ) from e
+
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"Timeout ({timeout}s) al contactar la API de Gemini. "
+                "Intenta con un prompt más corto o verifica tu conexión."
+            )
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                "No se pudo conectar a la API de Gemini. "
+                "Verifica tu conexión a internet."
+            )
+
+    @staticmethod
+    def call_gemini_text(
+        api_key: str,
+        prompt: str,
+        model: str = DEFAULT_TEXT_MODEL,
+        system_instruction: Optional[str] = None,
+        thinking_budget: Optional[str] = None,
+        extra_parts: Optional[List[Dict]] = None,
+        generation_config: Optional[Dict] = None,
+    ) -> str:
+        """Llamada simplificada para obtener solo el texto de respuesta."""
         parts = []
-
-        # Agregar imágenes
-        if images:
-            for img_data in images:
-                parts.append({
-                    "inlineData": {
-                        "mimeType": "image/png",
-                        "data": img_data
-                    }
-                })
-
-        # Agregar audio
-        if audio_data:
-            for audio in audio_data:
-                if isinstance(audio, dict):
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": audio.get("mime_type", "audio/wav"),
-                            "data": audio.get("data", "")
-                        }
-                    })
-                else:
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": "audio/wav",
-                            "data": audio
-                        }
-                    })
-
-        # Agregar video
-        if video_data:
-            for video in video_data:
-                if isinstance(video, dict):
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": video.get("mime_type", "video/mp4"),
-                            "data": video.get("data", "")
-                        }
-                    })
-                else:
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": "video/mp4",
-                            "data": video
-                        }
-                    })
-
-        # Agregar archivos (PDF, etc)
-        if file_data:
-            for file in file_data:
-                if isinstance(file, dict):
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": file.get("mime_type", "application/pdf"),
-                            "data": file.get("data", "")
-                        }
-                    })
-                else:
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": "application/pdf",
-                            "data": file
-                        }
-                    })
-
-        # Agregar el prompt de texto
+        if extra_parts:
+            parts.extend(extra_parts)
         parts.append({"text": prompt})
 
-        # Configuración de generación
-        generation_config = {
-            "temperature": temperature
+        contents = [{"role": "user", "parts": parts}]
+        gen_config = generation_config or {}
+
+        # Thinking budget (para modelos que lo soportan)
+        if thinking_budget:
+            budget_map = {"Low": 1024, "High": 8192}
+            if thinking_budget in budget_map:
+                gen_config["thinkingConfig"] = {
+                    "thinkingBudget": budget_map[thinking_budget]
+                }
+
+        result = GoogleAICore.call_gemini(
+            api_key=api_key,
+            model=model,
+            contents=contents,
+            system_instruction=system_instruction,
+            generation_config=gen_config if gen_config else None,
+        )
+        return GoogleAICore.extract_text_from_response(result)
+
+    @staticmethod
+    def extract_text_from_response(response: Dict) -> str:
+        """Extrae el texto limpio de una respuesta de Gemini."""
+        try:
+            candidates = response.get("candidates", [])
+            if not candidates:
+                return "[Sin respuesta del modelo]"
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text_parts = [p["text"] for p in parts if "text" in p]
+            return "\n".join(text_parts) if text_parts else "[Respuesta vacía]"
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(f"Error extrayendo texto de respuesta: {e}")
+            return f"[Error al parsear respuesta: {str(e)}]"
+
+    # ========================================================================
+    # GENERACIÓN DE IMÁGENES (Imagen 3 / Nano Banana)
+    # ========================================================================
+    @staticmethod
+    def generate_image(
+        api_key: str,
+        prompt: str,
+        model: str = DEFAULT_IMAGE_MODEL,
+        negative_prompt: str = "",
+        aspect_ratio: str = "1:1",
+        num_images: int = 1,
+    ) -> List[bytes]:
+        """Genera imágenes usando la API de Imagen 3. Retorna lista de bytes PNG."""
+        url = GoogleAICore._build_url(model, api_key)
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"],
+                "imageSizes": aspect_ratio,
+            },
+        }
+        if negative_prompt:
+            payload["generationConfig"]["negativePrompt"] = negative_prompt
+
+        try:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            images = []
+            for candidate in data.get("candidates", []):
+                for part in candidate.get("content", {}).get("parts", []):
+                    if "inlineData" in part:
+                        images.append(base64.b64decode(part["inlineData"]["data"]))
+            return images
+
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response else "N/A"
+            error_msg = ""
+            try:
+                error_msg = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                error_msg = str(e)
+            raise RuntimeError(
+                f"Error HTTP {status_code} al generar imagen: {error_msg}"
+            )
+
+    # ========================================================================
+    # GENERACIÓN DE VIDEO (Veo 3.1) - API Asíncrona con Polling
+    # ========================================================================
+    @staticmethod
+    def generate_video(
+        api_key: str,
+        prompt: str,
+        model: str = DEFAULT_VIDEO_MODEL,
+        resolution_preset: str = "1920x1080 (16:9)",
+        duration_seconds: int = 6,
+        init_images_b64: Optional[List[str]] = None,
+        last_frame_b64: Optional[str] = None,
+        reference_images_b64: Optional[List[str]] = None,
+        poll_interval: int = 15,
+        max_wait: int = 600,
+    ) -> bytes:
+        """Genera video usando Veo 3.1 (API asíncrona con polling). Retorna bytes MP4."""
+        url = VEO_PREDICT_ENDPOINT.format(
+            base=GEMINI_BASE_URL, model=model, key=api_key
+        )
+
+        # Parsear resolución
+        if resolution_preset in VEO_RESOLUTION_PRESETS:
+            width, height = VEO_RESOLUTION_PRESETS[resolution_preset]
+        else:
+            width, height = 1920, 1080
+
+        # Construir payload
+        instances_parts = [{"text": prompt}]
+
+        if init_images_b64:
+            for img_b64 in init_images_b64:
+                instances_parts.append({
+                    "inlineData": {"mimeType": "image/png", "data": img_b64}
+                })
+
+        if last_frame_b64:
+            instances_parts.append({
+                "inlineData": {"mimeType": "image/png", "data": last_frame_b64}
+            })
+
+        if reference_images_b64:
+            for ref_b64 in reference_images_b64:
+                instances_parts.append({
+                    "inlineData": {"mimeType": "image/png", "data": ref_b64}
+                })
+
+        payload = {
+            "contents": [{"parts": instances_parts}],
+            "generationConfig": {
+                "responseModalities": ["VIDEO"],
+                "resolution": f"{width}x{height}",
+                "videoDuration": f"{duration_seconds}s",
+            },
         }
 
-        # Agregar seed si no es 0
-        if seed != 0:
-            generation_config["seed"] = seed
+        try:
+            # 1. Iniciar operación
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+            operation = response.json()
+            operation_name = operation.get("name", "")
+
+            if not operation_name:
+                raise RuntimeError("La API no retornó un nombre de operación válido.")
+
+            # 2. Polling hasta completar
+            elapsed = 0
+            while elapsed < max_wait:
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+
+                poll_url = f"{GEMINI_BASE_URL}/operations/{operation_name}?key={api_key}"
+                poll_resp = requests.get(poll_url, timeout=30)
+                poll_resp.raise_for_status()
+                poll_data = poll_resp.json()
+
+                if poll_data.get("done", False):
+                    result = poll_data.get("response", {})
+                    # Intentar inline data
+                    for cand in result.get("candidates", []):
+                        for part in cand.get("content", {}).get("parts", []):
+                            if "inlineData" in part:
+                                return base64.b64decode(part["inlineData"]["data"])
+
+                    # Intentar videoUri
+                    generated = result.get("generatedVideos", [])
+                    if generated:
+                        video_uri = generated[0].get("video", {}).get("uri", "")
+                        if video_uri:
+                            vid_resp = requests.get(f"{video_uri}&key={api_key}", timeout=120)
+                            vid_resp.raise_for_status()
+                            return vid_resp.content
+
+                    raise RuntimeError("Operación finalizada pero no se encontró video.")
+
+                metadata = poll_data.get("metadata", {})
+                progress = metadata.get("progress", "desconocido")
+                logger.info(f"[Veo 3.1] Generando... Progreso: {progress} | {elapsed}s")
+
+            raise RuntimeError(f"Timeout: La generación excedió {max_wait}s.")
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response else "N/A"
+            body = ""
+            try:
+                body = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                body = str(e)
+            raise RuntimeError(f"Error HTTP {status} en Veo 3.1: {body}")
+
+    # ========================================================================
+    # GENERACIÓN DE AUDIO (Lyria 3)
+    # ========================================================================
+    @staticmethod
+    def generate_audio(
+        api_key: str,
+        prompt: str,
+        model: str = DEFAULT_AUDIO_MODEL,
+        duration_seconds: int = 30,
+        include_vocals: bool = False,
+        init_image_b64: Optional[str] = None,
+        video_frames_b64: Optional[List[str]] = None,
+    ) -> bytes:
+        """
+        Genera audio usando Lyria 3. Retorna bytes WAV.
+        Filtra warnings de SynthID automáticamente sin crashear.
+        """
+        url = GoogleAICore._build_url(model, api_key)
+
+        parts = []
+        if init_image_b64:
+            parts.append({"inlineData": {"mimeType": "image/png", "data": init_image_b64}})
+
+        if video_frames_b64:
+            for frame_b64 in video_frames_b64:
+                parts.append({"inlineData": {"mimeType": "image/png", "data": frame_b64}})
+
+        vocal_tag = " Include vocals and singing." if include_vocals else " Instrumental only, no vocals."
+        parts.append({"text": prompt + vocal_tag})
 
         payload = {
             "contents": [{"parts": parts}],
-            "generationConfig": generation_config
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "audioDuration": f"{duration_seconds}s",
+            },
         }
 
-        # System instruction como campo separado
-        if system_prompt:
-            payload["systemInstruction"] = {
-                "parts": [{"text": system_prompt}]
-            }
+        try:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=180,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        response = requests.post(
-            f"{BASE_URL}/models/{self.model}:generateContent",
-            headers=headers,
-            json=payload,
-            timeout=180
-        )
+            # Filtrar warnings de SynthID (no deben crashear)
+            for warning in data.get("warnings", []):
+                logger.info(f"[Lyria 3] SynthID Warning (ignorado): {warning}")
 
-        return response.json()
+            for candidate in data.get("candidates", []):
+                for part in candidate.get("content", {}).get("parts", []):
+                    if "inlineData" in part:
+                        return base64.b64decode(part["inlineData"]["data"])
 
-    def generate_image(self, prompt: str, system_prompt: str = "", images: list = None,
-                       aspect_ratio: str = "1:1", image_size: str = "1K",
-                       seed: int = 0, response_modalities: list = None):
-        """
-        Genera imagen usando Gemini API (modelos con capacidad de imagen)
-        """
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
+            raise RuntimeError("La API no retornó datos de audio.")
 
-        parts = []
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response else "N/A"
+            body = ""
+            try:
+                body = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                body = str(e)
+            raise RuntimeError(f"Error HTTP {status} en Lyria 3: {body}")
 
-        # Agregar imágenes de referencia primero
-        if images:
-            for img_data in images:
-                parts.append({
-                    "inlineData": {
-                        "mimeType": "image/png",
-                        "data": img_data
-                    }
-                })
-
-        # Agregar el prompt
-        parts.append({"text": prompt})
-
-        # Configuración de generación
-        generation_config = {
-            "responseModalities": response_modalities or ["TEXT", "IMAGE"],
-            "imageConfig": {
-                "aspectRatio": aspect_ratio,
-                "imageSize": image_size
-            }
-        }
-
-        # Agregar seed si no es 0
-        if seed != 0:
-            generation_config["seed"] = seed
-
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": generation_config
-        }
-
-        # System instruction
-        if system_prompt:
-            payload["systemInstruction"] = {
-                "parts": [{"text": system_prompt}]
-            }
-
-        response = requests.post(
-            f"{BASE_URL}/models/{self.model}:generateContent",
-            headers=headers,
-            json=payload,
-            timeout=300
-        )
-
-        return response.json()
-
+    # ========================================================================
+    # UTILIDADES DE CONVERSIÓN (Tensores ComfyUI)
+    # ========================================================================
     @staticmethod
-    def get_random_seed():
-        """Genera una semilla aleatoria"""
-        return random.randint(1, 2147483647)
+    def tensor_to_base64(tensor: torch.Tensor, index: int = 0) -> str:
+        """Convierte tensor [B, H, W, C] a base64 PNG."""
+        if tensor.dim() == 4:
+            img_tensor = tensor[index]
+        elif tensor.dim() == 3:
+            img_tensor = tensor
+        else:
+            raise ValueError(f"Tensor con forma inesperada: {tensor.shape}")
 
-    @staticmethod
-    def tensor_to_base64(tensor):
-        """
-        Convierte tensor de ComfyUI a base64
-        ComfyUI IMAGE format: [B, H, W, C] con valores 0-1
-        """
-        import torch
-        import numpy as np
-
-        # Tomar primera imagen del batch
-        if len(tensor.shape) == 4:
-            tensor = tensor[0]
-
-        # Convertir a numpy y escalar a 0-255
-        img_np = (tensor.cpu().numpy() * 255).astype(np.uint8)
-
-        # Crear imagen PIL
-        img = Image.fromarray(img_np)
-
-        # Convertir a base64
-        buffer = BytesIO()
+        img_np = (img_tensor.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+        img = Image.fromarray(img_np, "RGB")
+        buffer = io.BytesIO()
         img.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     @staticmethod
-    def base64_to_tensor(b64_string):
-        """
-        Convierte base64 a tensor de ComfyUI
-        """
-        import torch
-        import numpy as np
-
+    def base64_to_image_tensor(b64_string: str) -> torch.Tensor:
+        """Decodifica imagen base64 a tensor [1, H, W, C] float 0.0-1.0."""
         img_bytes = base64.b64decode(b64_string)
-        img = Image.open(BytesIO(img_bytes)).convert("RGB")
-
-        # Convertir a numpy y normalizar a 0-1
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img_np = np.array(img).astype(np.float32) / 255.0
-
-        # Convertir a tensor [B, H, W, C]
-        tensor = torch.from_numpy(img_np).unsqueeze(0)
-
-        return tensor
+        return torch.from_numpy(img_np).unsqueeze(0)
 
     @staticmethod
-    def audio_to_base64(audio_tensor, sample_rate: int = 44100):
+    def bytes_to_image_tensor(img_bytes: bytes) -> torch.Tensor:
+        """Convierte bytes de imagen a tensor [1, H, W, C] float 0.0-1.0."""
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img_np = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(img_np).unsqueeze(0)
+
+    @staticmethod
+    def base64_to_video_tensor(b64_string: str) -> torch.Tensor:
         """
-        Convierte tensor de audio a base64 WAV
+        Decodifica MP4 base64 a tensor [B, H, W, C] usando OpenCV + tempfile.
+        ⚡ FPS estándar de Veo: 24. Configurar VHS Video Combine a 24 FPS.
         """
-        import torch
-        import numpy as np
-        import wave
-        import struct
+        import cv2
 
-        # Convertir tensor a numpy
-        if isinstance(audio_tensor, torch.Tensor):
-            audio_np = audio_tensor.cpu().numpy()
-        else:
-            audio_np = np.array(audio_tensor)
+        video_bytes = base64.b64decode(b64_string)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
 
-        # Normalizar a int16
-        if audio_np.max() <= 1.0:
-            audio_np = (audio_np * 32767).astype(np.int16)
-        else:
-            audio_np = audio_np.astype(np.int16)
+        try:
+            cap = cv2.VideoCapture(tmp_path)
+            if not cap.isOpened():
+                raise RuntimeError("No se pudo abrir el video decodificado.")
 
-        # Crear WAV en memoria
-        buffer = BytesIO()
-        with wave.open(buffer, 'wb') as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(sample_rate)
-            wav.writeframes(audio_np.tobytes())
+            frames = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(frame_rgb.astype(np.float32) / 255.0)
+            cap.release()
 
-        buffer.seek(0)
-        return base64.b64encode(buffer.read()).decode("utf-8")
+            if not frames:
+                raise RuntimeError("El video decodificado no contiene frames.")
+
+            tensor = torch.from_numpy(np.stack(frames, axis=0))
+            logger.info(
+                f"[Video] Decodificado: {tensor.shape[0]} frames, "
+                f"{tensor.shape[2]}x{tensor.shape[1]}, 24 FPS asumido"
+            )
+            return tensor
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def base64_to_audio_tensor(b64_string: str) -> Dict[str, Any]:
+        """
+        Decodifica audio base64 a formato ComfyUI audio.
+        Retorna: {"waveform": tensor [B, C, S], "sample_rate": int}
+        """
+        import torchaudio
+
+        audio_bytes = base64.b64decode(b64_string)
+        waveform, sample_rate = torchaudio.load(io.BytesIO(audio_bytes))
+        if waveform.dim() == 2:
+            waveform = waveform.unsqueeze(0)
+        return {"waveform": waveform, "sample_rate": sample_rate}
+
+    @staticmethod
+    def video_bytes_to_tensor(video_bytes: bytes) -> torch.Tensor:
+        """Wrapper: bytes de video MP4 → tensor [B, H, W, C]."""
+        b64 = base64.b64encode(video_bytes).decode("utf-8")
+        return GoogleAICore.base64_to_video_tensor(b64)
+
+    @staticmethod
+    def audio_bytes_to_dict(audio_bytes: bytes) -> Dict[str, Any]:
+        """Wrapper: bytes de audio → dict ComfyUI {"waveform", "sample_rate"}."""
+        b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        return GoogleAICore.base64_to_audio_tensor(b64)
+
+    # ========================================================================
+    # UTILIDADES DE IMAGEN
+    # ========================================================================
+    @staticmethod
+    def resize_tensor_to_match(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Redimensiona source al H,W de target. Ambos [B, H, W, C]."""
+        target_h, target_w = target.shape[1], target.shape[2]
+        if source.shape[1] == target_h and source.shape[2] == target_w:
+            return source
+        source_perm = source.permute(0, 3, 1, 2)
+        resized = torch.nn.functional.interpolate(
+            source_perm, size=(target_h, target_w), mode="bilinear", align_corners=False,
+        )
+        return resized.permute(0, 2, 3, 1)
+
+    @staticmethod
+    def create_error_image(error_msg: str, width: int = 512, height: int = 512) -> torch.Tensor:
+        """
+        Crea tensor de imagen roja 512x512 con el texto de error impreso.
+        Usado para HTTP 400 (violación de seguridad) sin crashear el workflow.
+        Retorna [1, H, W, C] float 0.0-1.0.
+        """
+        img = Image.new("RGB", (width, height), color=(180, 30, 30))
+        draw = ImageDraw.Draw(img)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        except (IOError, OSError):
+            try:
+                font = ImageFont.truetype("arial.ttf", 16)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
+
+        margin = 20
+        max_width = width - (margin * 2)
+        lines = ["⚠️ ERROR DE SEGURIDAD", "=" * 30, ""]
+        current_line = ""
+
+        for word in error_msg.split():
+            test_line = f"{current_line} {word}".strip()
+            try:
+                bbox = draw.textbbox((0, 0), test_line, font=font)
+                line_width = bbox[2] - bbox[0]
+            except AttributeError:
+                line_width = len(test_line) * 8
+
+            if line_width <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+
+        y = margin
+        for line in lines:
+            draw.text((margin, y), line, fill=(255, 255, 255), font=font)
+            y += 22
+            if y > height - margin:
+                break
+
+        img_np = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(img_np).unsqueeze(0)
+
+    # ========================================================================
+    # UTILIDADES DE COSTO
+    # ========================================================================
+    @staticmethod
+    def estimate_video_cost(duration_seconds: int) -> str:
+        """Retorna string con costo estimado: $0.05/segundo."""
+        cost = duration_seconds * VIDEO_COST_PER_SECOND
+        return f"💰 Costo estimado: ${cost:.2f} USD ({duration_seconds}s × ${VIDEO_COST_PER_SECOND}/s)"
