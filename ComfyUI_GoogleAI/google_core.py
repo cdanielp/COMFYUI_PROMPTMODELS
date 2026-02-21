@@ -1,13 +1,20 @@
 """
-google_core.py - Motor Central de la API de Google AI (V2.0)
-============================================================
+google_core.py - Motor Central de la API de Google AI (V2.4.2)
+==============================================================
 Maneja TODAS las comunicaciones HTTP con la API REST de Google.
-Regla de Oro: CERO SDKs. Solo requests puras.
+Regla de Oro: CERO SDKs externos. Solo requests/aiohttp puras.
+
+Cambios V2.4.2:
+- generate_image_gemini() → nuevo método para Nano Banana Pro/Flash
+  Usa generateContent con responseModalities:IMAGE (≠ Imagen 4)
+  Soporta hasta 14 imágenes de referencia como inlineData
 
 Autor: Prompt Models Studio | cdanielp
 """
 
 import requests
+import aiohttp
+import asyncio
 import base64
 import json
 import io
@@ -15,7 +22,7 @@ import os
 import tempfile
 import time
 import logging
-from typing import Optional, Dict, Any, List, Tuple, Union
+from typing import Optional, Dict, Any, List
 
 import torch
 import numpy as np
@@ -28,61 +35,61 @@ logger = logging.getLogger("ComfyUI_GoogleAI")
 # ============================================================================
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# Endpoints correctos por tipo de generación
-GEMINI_TEXT_ENDPOINT   = "{base}/models/{model}:generateContent?key={key}"
+GEMINI_TEXT_ENDPOINT     = "{base}/models/{model}:generateContent?key={key}"
 IMAGEN_GENERATE_ENDPOINT = "{base}/models/{model}:generateImages?key={key}"
-VEO_GENERATE_ENDPOINT  = "{base}/models/{model}:generateVideos?key={key}"
-VEO_POLL_ENDPOINT      = "{base}/{operation_name}?key={key}"
+VEO_GENERATE_ENDPOINT    = "{base}/models/{model}:generateVideos?key={key}"
+VEO_POLL_ENDPOINT        = "{base}/{operation_name}?key={key}"
 
-# Modelos por defecto (strings exactos de la API — Feb 2026)
+# Modelos por defecto — strings exactos de la API (Feb 2026)
 DEFAULT_TEXT_MODEL  = "gemini-3.1-pro-preview"
 DEFAULT_IMAGE_MODEL = "imagen-4.0-generate-001"
 DEFAULT_VIDEO_MODEL = "veo-3.1-generate-preview"
 
-# Costo estimado Veo 3.1 Standard (USD/segundo)
+# Familias de modelos para routing interno
+GEMINI_IMAGE_MODELS = ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
+IMAGEN_MODELS       = ("imagen-4.0", "imagen-3.0")
+
+# Costo Veo 3.1 Standard (USD/segundo)
 VIDEO_COST_PER_SECOND = 0.40
 
-# Presets de resolución para Veo 3.1
-# Valor: (resolution_api, aspect_ratio_api)
+# Presets resolución Veo 3.1: (resolution_api, aspect_ratio_api)
+# ⚠️ Convención INVERSA a SIZE_PRESETS de imagen que usa (aspect_ratio, resolution_hint)
+#    Video: (resolution_api, aspect_ratio_api)  — ej. ("1080p", "16:9")
+#    Imagen: (aspect_ratio, resolution_hint)    — ej. ("16:9", "2K")
 VEO_RESOLUTION_PRESETS = {
     "1920x1080 (16:9)":    ("1080p", "16:9"),
     "1080x1920 (9:16)":    ("1080p", "9:16"),
     "1080x1080 (1:1)":     ("1080p", "1:1"),
-    "3840x2160 (16:9 4K)": ("4k",   "16:9"),
-    "2160x3840 (9:16 4K)": ("4k",   "9:16"),
+    "3840x2160 (16:9 4K)": ("4k",    "16:9"),
+    "2160x3840 (9:16 4K)": ("4k",    "9:16"),
 }
 
-# Duraciones permitidas (segundos) — Veo 3.x soporta 4, 6 y 8s
 VEO_DURATION_OPTIONS = [4, 6, 8]
 
 # ============================================================================
-# SYSTEM PROMPTS (Diagnóstico)
+# SYSTEM PROMPTS — Diagnóstico
 # ============================================================================
 SYSTEM_PROMPT_ARCHITECTURE_DETECTOR = (
     "Eres un experto en modelos de difusión. Analiza estos keys de un archivo "
     ".safetensors y determina la arquitectura exacta del modelo: Flux, SDXL, "
     "SD 1.5, SD 3, Pony, etc. Explica brevemente cómo lo determinaste."
 )
-
 SYSTEM_PROMPT_TRIGGER_EXTRACTOR = (
     "Formatea las siguientes tags de frecuencia de un LoRA de Stable Diffusion "
     "en una cadena limpia de trigger words separadas por comas. Ordénalas por "
     "frecuencia descendente. Solo devuelve la cadena de texto, sin explicaciones."
 )
-
 SYSTEM_PROMPT_WORKFLOW_ANALYZER = (
     "Analiza las keys 'class_type' de este JSON de ComfyUI. "
     "Enumera el repositorio exacto de GitHub para instalar cada custom node. "
     "Advierte explícitamente si hay nodos con múltiples forks conflictivos "
     "(ej. IP-Adapter)."
 )
-
 SYSTEM_PROMPT_COMPATIBILITY_CHECKER = (
     "Analiza las dimensiones de tensores de un modelo checkpoint y un LoRA. "
     "Determina si son compatibles (ej. ambos SD 1.5, ambos SDXL, etc.). "
     "Explica la compatibilidad en español simple."
 )
-
 SYSTEM_PROMPT_TRAINING_ANALYZER = (
     "Eres un experto en entrenamiento de modelos de IA. Analiza estos datos de "
     "loss de entrenamiento. Evalúa si hay señales de sobreentrenamiento (overfitting) "
@@ -91,14 +98,20 @@ SYSTEM_PROMPT_TRAINING_ANALYZER = (
 )
 
 
+def _make_dummy_audio() -> Dict:
+    """Silencio estéreo 1s @ 44100Hz — garantizado para Veo 2.0 o MP4 sin audio."""
+    return {"waveform": torch.zeros((1, 2, 44100)), "sample_rate": 44100}
+
+
 class GoogleAICore:
     """
     Motor central para todas las comunicaciones con la API de Google AI.
-    Usa EXCLUSIVAMENTE requests HTTP puras. CERO SDKs.
+    - Texto/Imagen: requests síncronas
+    - Video: aiohttp async (llamar desde nodos via asyncio bridge)
     """
 
     # ========================================================================
-    # RESOLUCIÓN DE API KEY
+    # API KEY
     # ========================================================================
     @staticmethod
     def resolve_api_key(node_key: str = "") -> str:
@@ -115,7 +128,7 @@ class GoogleAICore:
         )
 
     # ========================================================================
-    # TEXTO — Gemini generateContent
+    # TEXTO — generateContent (síncrono)
     # ========================================================================
     @staticmethod
     def call_gemini(
@@ -144,7 +157,6 @@ class GoogleAICore:
             )
             response.raise_for_status()
             return response.json()
-
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "N/A"
             error_body = ""
@@ -156,15 +168,9 @@ class GoogleAICore:
                 f"Error HTTP {status_code} de la API de Gemini:\n{error_body}"
             ) from e
         except requests.exceptions.Timeout:
-            raise RuntimeError(
-                f"Timeout ({timeout}s) al contactar la API de Gemini. "
-                "Intenta con un prompt más corto o verifica tu conexión."
-            )
+            raise RuntimeError(f"Timeout ({timeout}s) al contactar la API de Gemini.")
         except requests.exceptions.ConnectionError:
-            raise RuntimeError(
-                "No se pudo conectar a la API de Gemini. "
-                "Verifica tu conexión a internet."
-            )
+            raise RuntimeError("No se pudo conectar a la API de Gemini.")
 
     @staticmethod
     def call_gemini_text(
@@ -210,11 +216,96 @@ class GoogleAICore:
             text_parts = [p["text"] for p in parts if "text" in p]
             return "\n".join(text_parts) if text_parts else "[Respuesta vacía]"
         except (KeyError, IndexError, TypeError) as e:
-            logger.error(f"Error extrayendo texto de respuesta: {e}")
             return f"[Error al parsear respuesta: {str(e)}]"
 
     # ========================================================================
-    # IMAGEN — Imagen 4 / generateImages
+    # IMAGEN — Nano Banana Pro/Flash → generateContent + responseModalities:IMAGE
+    # ========================================================================
+    @staticmethod
+    def generate_image_gemini(
+        api_key: str,
+        prompt: str,
+        model: str,
+        system_instruction: Optional[str] = None,
+        reference_images_b64: Optional[List[str]] = None,
+        aspect_ratio: str = "1:1",
+        resolution_hint: str = "2K",
+        seed: int = 0,
+        timeout: int = 180,
+    ) -> bytes:
+        """
+        Genera imagen con Nano Banana Pro/Flash (modelos Gemini multimodales).
+        Endpoint: generateContent con responseModalities: ["IMAGE"]
+        Soporta hasta 14 imágenes de referencia como inlineData.
+        Seed para reproducibilidad (0 = sin fijar).
+        Retorna bytes PNG de la imagen generada.
+        """
+        url = GEMINI_TEXT_ENDPOINT.format(
+            base=GEMINI_BASE_URL, model=model, key=api_key
+        )
+
+        # Construir parts: primero las referencias, luego el prompt
+        parts = []
+        if reference_images_b64:
+            for img_b64 in reference_images_b64[:14]:  # Límite de 14 según documentación
+                parts.append({
+                    "inlineData": {"mimeType": "image/png", "data": img_b64}
+                })
+
+        # Para Nano Banana Pro, incluir indicador de resolución en el prompt
+        full_prompt = prompt
+        if "gemini-3-pro-image-preview" in model and resolution_hint == "4K":
+            full_prompt = f"{prompt}\n\nGenerate at maximum 4K resolution quality."
+        elif resolution_hint == "2K":
+            full_prompt = f"{prompt}\n\nGenerate at 2K resolution quality."
+
+        parts.append({"text": full_prompt})
+
+        payload: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"],
+                "aspectRatio": aspect_ratio,
+                "seed": seed,
+            },
+        }
+
+        if system_instruction:
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+        try:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Extraer imagen de la respuesta
+            for candidate in data.get("candidates", []):
+                for part in candidate.get("content", {}).get("parts", []):
+                    if "inlineData" in part:
+                        mime = part["inlineData"].get("mimeType", "")
+                        if "image" in mime:
+                            return base64.b64decode(part["inlineData"]["data"])
+
+            raise RuntimeError("La API no retornó imagen en la respuesta.")
+
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response else "N/A"
+            error_msg = ""
+            try:
+                error_msg = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                error_msg = str(e)
+            raise RuntimeError(
+                f"Error HTTP {status_code} en Nano Banana ({model}): {error_msg}"
+            )
+
+    # ========================================================================
+    # IMAGEN — Imagen 4/3 → generateImages (síncrono)
     # ========================================================================
     @staticmethod
     def generate_image(
@@ -224,27 +315,21 @@ class GoogleAICore:
         negative_prompt: str = "",
         aspect_ratio: str = "1:1",
         num_images: int = 1,
+        seed: int = 0,
     ) -> List[bytes]:
-        """
-        Genera imágenes usando la API de Imagen (generateImages).
-        Retorna lista de bytes PNG.
-        Compatible con Imagen 3 e Imagen 4.
-        """
+        """Genera imágenes via Imagen 4 (generateImages). Seed para reproducibilidad. Retorna lista de bytes PNG."""
         url = IMAGEN_GENERATE_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
-
         config: Dict[str, Any] = {
             "numberOfImages": num_images,
             "aspectRatio": aspect_ratio,
+            "seed": seed,
         }
         if negative_prompt:
             config["negativePrompt"] = negative_prompt
 
-        payload = {
-            "prompt": prompt,
-            "config": config,
-        }
+        payload = {"prompt": prompt, "config": config}
 
         try:
             response = requests.post(
@@ -255,14 +340,12 @@ class GoogleAICore:
             )
             response.raise_for_status()
             data = response.json()
-
             images = []
             for item in data.get("generatedImages", []):
                 img_data = item.get("image", {}).get("imageBytes", "")
                 if img_data:
                     images.append(base64.b64decode(img_data))
             return images
-
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "N/A"
             error_msg = ""
@@ -270,15 +353,14 @@ class GoogleAICore:
                 error_msg = e.response.json().get("error", {}).get("message", "")
             except Exception:
                 error_msg = str(e)
-            raise RuntimeError(
-                f"Error HTTP {status_code} al generar imagen: {error_msg}"
-            )
+            raise RuntimeError(f"Error HTTP {status_code} al generar imagen: {error_msg}")
 
     # ========================================================================
-    # VIDEO — Veo 3.1 / generateVideos (API asíncrona con polling)
+    # VIDEO — Veo 3.1 → generateVideos (ASYNC con aiohttp + polling)
+    # Llamar desde nodos síncronos con _run_async() en google_video_node.py
     # ========================================================================
     @staticmethod
-    def generate_video(
+    async def generate_video(
         api_key: str,
         prompt: str,
         model: str = DEFAULT_VIDEO_MODEL,
@@ -290,20 +372,15 @@ class GoogleAICore:
         poll_interval: int = 15,
         max_wait: int = 600,
     ) -> bytes:
-        """
-        Genera video usando Veo 3.1 (generateVideos, API asíncrona con polling).
-        Retorna bytes MP4.
-        """
+        """Genera video con Veo 3.1 (async). Retorna bytes MP4."""
         start_url = VEO_GENERATE_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
 
-        # Resolución y aspect ratio desde preset
         resolution, aspect_ratio = VEO_RESOLUTION_PRESETS.get(
             resolution_preset, ("1080p", "16:9")
         )
 
-        # Config base
         video_config: Dict[str, Any] = {
             "resolution": resolution,
             "aspectRatio": aspect_ratio,
@@ -311,7 +388,6 @@ class GoogleAICore:
             "numberOfVideos": 1,
         }
 
-        # Imágenes de referencia para Storyboard
         if reference_images_b64:
             video_config["referenceImages"] = [
                 {
@@ -321,108 +397,156 @@ class GoogleAICore:
                 for b64 in reference_images_b64
             ]
 
-        # Last frame para interpolación
         if last_frame_b64:
             video_config["lastFrame"] = {
                 "imageBytes": last_frame_b64,
                 "mimeType": "image/png",
             }
 
-        # Payload principal
-        payload: Dict[str, Any] = {
-            "prompt": prompt,
-            "config": video_config,
-        }
+        payload: Dict[str, Any] = {"prompt": prompt, "config": video_config}
 
-        # Imagen inicial (image-to-video o video extension)
         if init_images_b64:
             payload["image"] = {
                 "imageBytes": init_images_b64[0],
                 "mimeType": "image/png",
             }
 
-        try:
-            # 1. Iniciar operación
-            response = requests.post(
-                start_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=60,
-            )
-            response.raise_for_status()
-            operation = response.json()
-            operation_name = operation.get("name", "")
+        headers = {"Content-Type": "application/json"}
 
+        async with aiohttp.ClientSession() as session:
+            # 1. Iniciar operación
+            try:
+                async with session.post(
+                    start_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        try:
+                            err_msg = json.loads(body).get("error", {}).get("message", body[:500])
+                        except Exception:
+                            err_msg = body[:500]
+                        raise RuntimeError(f"Error HTTP {resp.status} al iniciar Veo: {err_msg}")
+                    operation = await resp.json()
+            except aiohttp.ClientError as e:
+                raise RuntimeError(f"Error de conexión al iniciar Veo: {e}")
+
+            operation_name = operation.get("name", "")
             if not operation_name:
                 raise RuntimeError("La API no retornó un nombre de operación válido.")
 
             logger.info(f"[Veo] Operación iniciada: {operation_name}")
 
-            # 2. Polling hasta completar
+            # 2. Polling asíncrono
+            poll_url = VEO_POLL_ENDPOINT.format(
+                base=GEMINI_BASE_URL,
+                operation_name=operation_name,
+                key=api_key,
+            )
             elapsed = 0
             while elapsed < max_wait:
-                time.sleep(poll_interval)
+                await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
 
-                poll_url = VEO_POLL_ENDPOINT.format(
-                    base=GEMINI_BASE_URL,
-                    operation_name=operation_name,
-                    key=api_key,
-                )
-                poll_resp = requests.get(poll_url, timeout=30)
-                poll_resp.raise_for_status()
-                poll_data = poll_resp.json()
+                try:
+                    async with session.get(
+                        poll_url, timeout=aiohttp.ClientTimeout(total=30)
+                    ) as poll_resp:
+                        if poll_resp.status >= 400:
+                            body = await poll_resp.text()
+                            raise RuntimeError(f"Error HTTP {poll_resp.status} en polling: {body[:300]}")
+                        poll_data = await poll_resp.json()
+                except aiohttp.ClientError as e:
+                    logger.warning(f"[Veo] Error en polling (reintentando): {e}")
+                    continue
 
                 if poll_data.get("done", False):
-                    resp = poll_data.get("response", {})
+                    resp_data = poll_data.get("response", {})
 
-                    # Formato Gemini API: generateVideoResponse.generatedSamples
-                    gen_response = resp.get("generateVideoResponse", {})
+                    # Formato: generateVideoResponse.generatedSamples
+                    gen_response = resp_data.get("generateVideoResponse", {})
                     samples = gen_response.get("generatedSamples", [])
                     if samples:
                         video_uri = samples[0].get("video", {}).get("uri", "")
                         if video_uri:
-                            vid_resp = requests.get(
-                                f"{video_uri}&key={api_key}", timeout=180
-                            )
-                            vid_resp.raise_for_status()
-                            return vid_resp.content
+                            async with session.get(
+                                f"{video_uri}&key={api_key}",
+                                timeout=aiohttp.ClientTimeout(total=180),
+                            ) as vid_resp:
+                                vid_resp.raise_for_status()
+                                return await vid_resp.read()
 
                     # Formato alternativo: generatedVideos
-                    generated = resp.get("generatedVideos", [])
+                    generated = resp_data.get("generatedVideos", [])
                     if generated:
                         video_uri = generated[0].get("video", {}).get("uri", "")
                         if video_uri:
-                            vid_resp = requests.get(
-                                f"{video_uri}&key={api_key}", timeout=180
-                            )
-                            vid_resp.raise_for_status()
-                            return vid_resp.content
+                            async with session.get(
+                                f"{video_uri}&key={api_key}",
+                                timeout=aiohttp.ClientTimeout(total=180),
+                            ) as vid_resp:
+                                vid_resp.raise_for_status()
+                                return await vid_resp.read()
 
-                    # Formato inline (poco común pero posible)
-                    for cand in resp.get("candidates", []):
+                    # Inline data (caso raro)
+                    for cand in resp_data.get("candidates", []):
                         for part in cand.get("content", {}).get("parts", []):
                             if "inlineData" in part:
                                 return base64.b64decode(part["inlineData"]["data"])
 
-                    raise RuntimeError("Operación finalizada pero no se encontró video.")
+                    raise RuntimeError("Operación completada pero no se encontró video.")
 
-                progress = poll_data.get("metadata", {}).get("state", "PROCESSING")
-                logger.info(f"[Veo] Estado: {progress} | {elapsed}s transcurridos")
+                state = poll_data.get("metadata", {}).get("state", "PROCESSING")
+                logger.info(f"[Veo] Estado: {state} | {elapsed}s transcurridos")
 
-            raise RuntimeError(f"Timeout: La generación excedió {max_wait}s.")
-
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else "N/A"
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = str(e)
-            raise RuntimeError(f"Error HTTP {status} en Veo: {body}")
+            raise RuntimeError(f"Timeout: La generación de video excedió {max_wait}s.")
 
     # ========================================================================
-    # UTILIDADES DE CONVERSIÓN — Tensores ComfyUI
+    # AUDIO — Extracción de pista nativa del MP4 (Veo 3.1)
+    # ========================================================================
+    @staticmethod
+    def video_bytes_to_audio(video_bytes: bytes) -> Dict:
+        """
+        Extrae la pista de audio de un MP4 de Veo 3.1.
+        Si no hay pista, torchaudio falla, o el audio es silencio → dummy.
+        """
+        tmp_path = None
+        try:
+            import torchaudio
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
+            waveform, sample_rate = torchaudio.load(tmp_path)
+
+            if waveform.dim() == 2:
+                waveform = waveform.unsqueeze(0)
+
+            if waveform.abs().max() < 1e-6:
+                logger.info("[VideoAudio] Pista silenciosa → dummy.")
+                return _make_dummy_audio()
+
+            logger.info(f"[VideoAudio] Audio extraído: {waveform.shape} @ {sample_rate}Hz")
+            return {"waveform": waveform, "sample_rate": sample_rate}
+
+        except ImportError:
+            logger.warning("[VideoAudio] torchaudio no disponible → dummy.")
+            return _make_dummy_audio()
+        except Exception as e:
+            logger.warning(f"[VideoAudio] No se pudo extraer audio ({e}) → dummy.")
+            return _make_dummy_audio()
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    # ========================================================================
+    # CONVERSIÓN — Tensores ComfyUI
     # ========================================================================
     @staticmethod
     def tensor_to_base64(tensor: torch.Tensor, index: int = 0) -> str:
@@ -433,20 +557,11 @@ class GoogleAICore:
             img_tensor = tensor
         else:
             raise ValueError(f"Tensor con forma inesperada: {tensor.shape}")
-
         img_np = (img_tensor.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
         img = Image.fromarray(img_np, "RGB")
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-    @staticmethod
-    def base64_to_image_tensor(b64_string: str) -> torch.Tensor:
-        """Decodifica imagen base64 a tensor [1, H, W, C] float 0.0-1.0."""
-        img_bytes = base64.b64decode(b64_string)
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        img_np = np.array(img).astype(np.float32) / 255.0
-        return torch.from_numpy(img_np).unsqueeze(0)
 
     @staticmethod
     def bytes_to_image_tensor(img_bytes: bytes) -> torch.Tensor:
@@ -457,17 +572,15 @@ class GoogleAICore:
 
     @staticmethod
     def video_bytes_to_tensor(video_bytes: bytes) -> torch.Tensor:
-        """
-        Convierte bytes MP4 a tensor [B, H, W, C] usando OpenCV + tempfile.
-        ⚡ FPS estándar de Veo: 24. Configurar VHS Video Combine a 24 FPS.
-        """
+        """Convierte bytes MP4 a tensor [B, H, W, C]. 24 FPS asumido."""
         import cv2
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
-
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
             cap = cv2.VideoCapture(tmp_path)
             if not cap.isOpened():
                 raise RuntimeError("No se pudo abrir el video.")
@@ -477,24 +590,26 @@ class GoogleAICore:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(frame_rgb.astype(np.float32) / 255.0)
+                frames.append(
+                    cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                )
             cap.release()
 
             if not frames:
-                raise RuntimeError("El video decodificado no contiene frames.")
+                raise RuntimeError("El video no contiene frames.")
 
             tensor = torch.from_numpy(np.stack(frames, axis=0))
             logger.info(
-                f"[Video] Decodificado: {tensor.shape[0]} frames, "
+                f"[Video] {tensor.shape[0]} frames, "
                 f"{tensor.shape[2]}x{tensor.shape[1]}, 24 FPS asumido"
             )
             return tensor
         finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     # ========================================================================
     # UTILIDADES DE IMAGEN
@@ -503,16 +618,12 @@ class GoogleAICore:
     def resize_tensor_to_match(
         source: torch.Tensor, target: torch.Tensor
     ) -> torch.Tensor:
-        """Redimensiona source al H,W de target. Ambos [B, H, W, C]."""
         target_h, target_w = target.shape[1], target.shape[2]
         if source.shape[1] == target_h and source.shape[2] == target_w:
             return source
         source_perm = source.permute(0, 3, 1, 2)
         resized = torch.nn.functional.interpolate(
-            source_perm,
-            size=(target_h, target_w),
-            mode="bilinear",
-            align_corners=False,
+            source_perm, size=(target_h, target_w), mode="bilinear", align_corners=False,
         )
         return resized.permute(0, 2, 3, 1)
 
@@ -520,37 +631,28 @@ class GoogleAICore:
     def create_error_image(
         error_msg: str, width: int = 512, height: int = 512
     ) -> torch.Tensor:
-        """
-        Crea tensor de imagen roja 512x512 con el texto de error impreso.
-        Retorna [1, H, W, C] float 0.0-1.0.
-        """
+        """Imagen roja 512x512 con texto de error. [1, H, W, C] float 0.0-1.0."""
         img = Image.new("RGB", (width, height), color=(180, 30, 30))
         draw = ImageDraw.Draw(img)
-
         try:
-            font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16
-            )
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
         except (IOError, OSError):
             try:
                 font = ImageFont.truetype("arial.ttf", 16)
             except (IOError, OSError):
                 font = ImageFont.load_default()
 
-        margin = 20
-        max_width = width - (margin * 2)
+        margin, max_width = 20, width - 40
         lines = ["⚠️ ERROR", "=" * 30, ""]
         current_line = ""
-
         for word in error_msg.split():
             test_line = f"{current_line} {word}".strip()
             try:
                 bbox = draw.textbbox((0, 0), test_line, font=font)
-                line_width = bbox[2] - bbox[0]
+                lw = bbox[2] - bbox[0]
             except AttributeError:
-                line_width = len(test_line) * 8
-
-            if line_width <= max_width:
+                lw = len(test_line) * 8
+            if lw <= max_width:
                 current_line = test_line
             else:
                 lines.append(current_line)
@@ -565,15 +667,15 @@ class GoogleAICore:
             if y > height - margin:
                 break
 
-        img_np = np.array(img).astype(np.float32) / 255.0
-        return torch.from_numpy(img_np).unsqueeze(0)
+        return torch.from_numpy(
+            np.array(img).astype(np.float32) / 255.0
+        ).unsqueeze(0)
 
     # ========================================================================
-    # UTILIDADES DE COSTO
+    # COSTO
     # ========================================================================
     @staticmethod
     def estimate_video_cost(duration_seconds: int) -> str:
-        """Retorna string con costo estimado: $0.40/segundo (Veo 3.1 Standard)."""
         cost = duration_seconds * VIDEO_COST_PER_SECOND
         return (
             f"💰 Costo estimado: ${cost:.2f} USD "

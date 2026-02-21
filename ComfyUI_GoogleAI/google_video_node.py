@@ -1,19 +1,24 @@
 """
-google_video_node.py - Nodos de Video para ComfyUI (V2.0)
-==========================================================
+google_video_node.py - Nodos de Video para ComfyUI (V2.4.2 Ultra)
+=================================================================
 Veo 3.1 | Duración [4,6,8]s | Costo $0.40/s (Standard)
 ⚡ FPS de salida: 24. Configurar VHS Video Combine a 24 FPS.
 
-Modelos actualizados a strings exactos de la API (Feb 2026).
-veo-3.0-generate-preview ELIMINADO — deprecado desde Nov 2025.
+Cambios V2.4.2:
+- TODOS los nodos de video ahora tienen output AUDIO (IMAGE, AUDIO, STRING)
+- VideoInterpolation y VideoStoryboard: audio nativo Veo 3.1 o silencio Veo 2.0
+- GoogleAI_VideoGenerator: sin cambios (ya tenía AUDIO desde V2.4.1)
+- Asyncio bridge: _run_async() para llamar al core async desde ComfyUI sync
 
 Autor: Prompt Models Studio | cdanielp
 """
 
+import asyncio
 import logging
 import torch
 from .google_core import (
-    GoogleAICore, VEO_RESOLUTION_PRESETS, VEO_DURATION_OPTIONS, DEFAULT_VIDEO_MODEL,
+    GoogleAICore, VEO_RESOLUTION_PRESETS, VEO_DURATION_OPTIONS,
+    DEFAULT_VIDEO_MODEL, _make_dummy_audio,
 )
 
 logger = logging.getLogger("ComfyUI_GoogleAI")
@@ -22,18 +27,33 @@ RESOLUTION_OPTIONS = list(VEO_RESOLUTION_PRESETS.keys())
 DURATION_OPTIONS = [str(d) for d in VEO_DURATION_OPTIONS]
 
 # Strings exactos válidos en la API — Feb 2026
-# veo-3.0-generate-preview ELIMINADO (deprecado Nov 12, 2025)
 VIDEO_MODELS = [
-    "veo-3.1-generate-preview",   # Antes: "veo-3.1" ❌
-    "veo-3.1-fast-generate-preview",
-    "veo-2.0-generate-001",
+    "veo-3.1-generate-preview",      # Standard — con audio nativo
+    "veo-3.1-fast-generate-preview", # Fast — con audio nativo
+    "veo-2.0-generate-001",          # Sin audio (silencio automático)
 ]
+
+
+def _run_async(coro):
+    """
+    Puente sync→async para métodos de nodos ComfyUI.
+    Crea un loop nuevo y lo cierra tras completar la corrutina.
+    Evita conflictos con el event loop de aiohttp del servidor ComfyUI.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 class GoogleAI_VideoGenerator:
     """
     Genera video con Veo 3.1.
     1 frame → Image-to-Video | >1 frame → Video Extension (último frame).
+    Output AUDIO: pista nativa del MP4 (Veo 3.1) o silencio (Veo 2.0).
     """
 
     @classmethod
@@ -52,17 +72,19 @@ class GoogleAI_VideoGenerator:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "generate_video"
     CATEGORY = "Google AI/Video"
 
     def generate_video(self, prompt, model, video_preset, duration_seconds,
                        api_key="", init_image_or_video=None, negative_prompt=""):
+        dummy_audio = _make_dummy_audio()
+        duration = int(duration_seconds)
+        cost_str = GoogleAICore.estimate_video_cost(duration)
+
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            duration = int(duration_seconds)
-            cost_str = GoogleAICore.estimate_video_cost(duration)
 
             init_images_b64 = None
             if init_image_or_video is not None:
@@ -78,25 +100,42 @@ class GoogleAI_VideoGenerator:
             if negative_prompt:
                 full_prompt += f"\n\nNegative: {negative_prompt}"
 
-            video_bytes = GoogleAICore.generate_video(
-                api_key=key, prompt=full_prompt, model=model,
-                resolution_preset=video_preset, duration_seconds=duration,
-                init_images_b64=init_images_b64,
+            # Asyncio bridge: ejecutar corrutina async desde contexto síncrono
+            video_bytes = _run_async(
+                GoogleAICore.generate_video(
+                    api_key=key, prompt=full_prompt, model=model,
+                    resolution_preset=video_preset, duration_seconds=duration,
+                    init_images_b64=init_images_b64,
+                )
             )
+
             video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+
+            # Audio: Veo 2.0 no genera audio → silencio directo sin intentar extraer
+            if "veo-2.0" in model:
+                logger.info("[VideoGenerator] Veo 2.0 detectado → silencio.")
+                audio_dict = dummy_audio
+            else:
+                # Veo 3.1: intentar extraer pista de audio nativa del MP4
+                audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
+
             logger.info(f"[VideoGenerator] {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}")
-            return (video_tensor, cost_str,)
+            return (video_tensor, audio_dict, cost_str,)
 
         except Exception as e:
             logger.error(f"[VideoGenerator] Error: {e}")
-            return (GoogleAICore.create_error_image(str(e)),
-                    f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",)
+            return (
+                GoogleAICore.create_error_image(str(e)),
+                dummy_audio,
+                f"❌ Error - {cost_str}",
+            )
 
 
 class GoogleAI_VideoInterpolation:
     """
     Interpola entre first_frame y last_frame.
     El last_frame se redimensiona automáticamente al tamaño del first_frame.
+    Output AUDIO: pista nativa del MP4 (Veo 3.1) o silencio (Veo 2.0).
     """
 
     @classmethod
@@ -113,39 +152,54 @@ class GoogleAI_VideoInterpolation:
             "optional": {"api_key": ("STRING", {"default": ""})},
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "interpolate"
     CATEGORY = "Google AI/Video"
 
     def interpolate(self, first_frame, last_frame, prompt, model,
                     video_preset, duration_seconds, api_key=""):
+        duration = int(duration_seconds)
+        cost_str = GoogleAICore.estimate_video_cost(duration)
+        dummy_audio = _make_dummy_audio()
+
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            duration = int(duration_seconds)
-            cost_str = GoogleAICore.estimate_video_cost(duration)
 
             last_resized = GoogleAICore.resize_tensor_to_match(last_frame, first_frame)
             first_b64 = GoogleAICore.tensor_to_base64(first_frame, 0)
-            last_b64 = GoogleAICore.tensor_to_base64(last_resized, 0)
+            last_b64  = GoogleAICore.tensor_to_base64(last_resized, 0)
 
-            video_bytes = GoogleAICore.generate_video(
-                api_key=key, prompt=prompt, model=model,
-                resolution_preset=video_preset, duration_seconds=duration,
-                init_images_b64=[first_b64], last_frame_b64=last_b64,
+            video_bytes = _run_async(
+                GoogleAICore.generate_video(
+                    api_key=key, prompt=prompt, model=model,
+                    resolution_preset=video_preset, duration_seconds=duration,
+                    init_images_b64=[first_b64], last_frame_b64=last_b64,
+                )
             )
-            return (GoogleAICore.video_bytes_to_tensor(video_bytes), cost_str,)
+
+            video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+
+            # Audio: Veo 2.0 no genera audio → silencio directo
+            if "veo-2.0" in model:
+                logger.info("[VideoInterpolation] Veo 2.0 detectado → silencio.")
+                audio_dict = dummy_audio
+            else:
+                audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
+
+            logger.info(f"[VideoInterpolation] {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}")
+            return (video_tensor, audio_dict, cost_str,)
 
         except Exception as e:
             logger.error(f"[VideoInterpolation] Error: {e}")
-            return (GoogleAICore.create_error_image(str(e)),
-                    f"❌ Error - {GoogleAICore.estimate_video_cost(int(duration_seconds))}",)
+            return (GoogleAICore.create_error_image(str(e)), dummy_audio, f"❌ Error - {cost_str}",)
 
 
 class GoogleAI_VideoStoryboard:
     """
     Video estilizado con hasta 3 imágenes de referencia.
     ⚠️ Con referencias, duración forzada a 8s (restricción API).
+    Output AUDIO: pista nativa del MP4 (Veo 3.1) o silencio (Veo 2.0).
     """
 
     @classmethod
@@ -165,39 +219,56 @@ class GoogleAI_VideoStoryboard:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING",)
-    RETURN_NAMES = ("video_frames", "cost_estimate",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING",)
+    RETURN_NAMES = ("video_frames", "audio", "cost_estimate",)
     FUNCTION = "generate_storyboard"
     CATEGORY = "Google AI/Video"
 
     def generate_storyboard(self, prompt, model, video_preset, duration_seconds,
                             api_key="", reference_image_1=None,
                             reference_image_2=None, reference_image_3=None):
+        duration = int(duration_seconds)
+        dummy_audio = _make_dummy_audio()
+
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            duration = int(duration_seconds)
 
             ref_b64_list = []
             for ref_img in [reference_image_1, reference_image_2, reference_image_3]:
                 if ref_img is not None:
                     ref_b64_list.append(GoogleAICore.tensor_to_base64(ref_img, 0))
 
-            # Regla: con referencias → forzar 8s
             if ref_b64_list and duration != 8:
                 logger.warning(f"[Storyboard] Duración forzada {duration}s → 8s (restricción API)")
                 duration = 8
 
             cost_str = GoogleAICore.estimate_video_cost(duration)
 
-            video_bytes = GoogleAICore.generate_video(
-                api_key=key, prompt=prompt, model=model,
-                resolution_preset=video_preset, duration_seconds=duration,
-                reference_images_b64=ref_b64_list if ref_b64_list else None,
+            video_bytes = _run_async(
+                GoogleAICore.generate_video(
+                    api_key=key, prompt=prompt, model=model,
+                    resolution_preset=video_preset, duration_seconds=duration,
+                    reference_images_b64=ref_b64_list if ref_b64_list else None,
+                )
             )
-            return (GoogleAICore.video_bytes_to_tensor(video_bytes), cost_str,)
+
+            video_tensor = GoogleAICore.video_bytes_to_tensor(video_bytes)
+
+            # Audio: Veo 2.0 no genera audio → silencio directo
+            if "veo-2.0" in model:
+                logger.info("[Storyboard] Veo 2.0 detectado → silencio.")
+                audio_dict = dummy_audio
+            else:
+                audio_dict = GoogleAICore.video_bytes_to_audio(video_bytes)
+
+            logger.info(f"[Storyboard] {video_tensor.shape[0]} frames @ 24 FPS | {cost_str}")
+            return (video_tensor, audio_dict, cost_str,)
 
         except Exception as e:
             logger.error(f"[Storyboard] Error: {e}")
             d = 8 if reference_image_1 else int(duration_seconds)
-            return (GoogleAICore.create_error_image(str(e)),
-                    f"❌ Error - {GoogleAICore.estimate_video_cost(d)}",)
+            return (
+                GoogleAICore.create_error_image(str(e)),
+                dummy_audio,
+                f"❌ Error - {GoogleAICore.estimate_video_cost(d)}",
+            )

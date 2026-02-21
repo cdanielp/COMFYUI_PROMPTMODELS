@@ -1,11 +1,17 @@
 """
-ComfyUI_GoogleAI - Suite Integral de Google AI (V2.0)
-======================================================
-Gemini 3.1 Pro | Imagen 4 | Veo 3.1 | Diagnóstico
+ComfyUI_GoogleAI - Suite Integral de Google AI (V2.4.2 Ultra)
+=============================================================
+Nano Banana Pro/Flash | Imagen 4 | Veo 3.1 + Audio | Diagnóstico
 
 ⚠️ RETROCOMPATIBILIDAD: Clases originales NO se renombran ni eliminan.
 📦 Audio (Lyria) REMOVIDO — lyria-3 no tiene API pública (Feb 2026).
 📦 El "Explicador de Errores" fue movido a ComfyUI_UniversalErrorExplainer.
+
+Novedades V2.4.2:
+- GoogleAI_ImageNode: 5 pines de referencia, routing Nano Banana/Imagen 4
+- size_preset con mapeo inteligente (aspectRatio + resolution_hint)
+- Validación 4K automática: downgrade a 2K en modelos no-Pro
+- generate_image_gemini() para Nano Banana vía generateContent
 
 Autor: Prompt Models Studio | cdanielp
 Repositorio: https://github.com/cdanielp/COMFYUI_PROMPTMODELS
@@ -32,36 +38,36 @@ from .google_diagnostic_node import (
 # ============================================================================
 NODE_CLASS_MAPPINGS = {
     # Suite 0: Texto
-    "GoogleAI_TextNode": GoogleAI_TextNode,
-    "GoogleAI_TextVisionNode": GoogleAI_TextVisionNode,
-    # Suite 0: Imagen
-    "GoogleAI_ImageNode": GoogleAI_ImageNode,
-    "GoogleAI_ImageBatchNode": GoogleAI_ImageBatchNode,
-    # Suite 1: Video
-    "GoogleAI_VideoGenerator": GoogleAI_VideoGenerator,
+    "GoogleAI_TextNode":           GoogleAI_TextNode,
+    "GoogleAI_TextVisionNode":     GoogleAI_TextVisionNode,
+    # Suite 1: Imagen
+    "GoogleAI_ImageNode":          GoogleAI_ImageNode,
+    "GoogleAI_ImageBatchNode":     GoogleAI_ImageBatchNode,
+    # Suite 2: Video
+    "GoogleAI_VideoGenerator":     GoogleAI_VideoGenerator,
     "GoogleAI_VideoInterpolation": GoogleAI_VideoInterpolation,
-    "GoogleAI_VideoStoryboard": GoogleAI_VideoStoryboard,
-    # Suite 2: Diagnóstico
+    "GoogleAI_VideoStoryboard":    GoogleAI_VideoStoryboard,
+    # Suite 3: Diagnóstico
     "GoogleAI_ModelArchitectureDetector": GoogleAI_ModelArchitectureDetector,
-    "GoogleAI_TriggerWordExtractor": GoogleAI_TriggerWordExtractor,
-    "GoogleAI_WorkflowAnalyzer": GoogleAI_WorkflowAnalyzer,
-    "GoogleAI_CompatibilityChecker": GoogleAI_CompatibilityChecker,
-    "GoogleAI_LoRATrainingAnalyzer": GoogleAI_LoRATrainingAnalyzer,
+    "GoogleAI_TriggerWordExtractor":      GoogleAI_TriggerWordExtractor,
+    "GoogleAI_WorkflowAnalyzer":          GoogleAI_WorkflowAnalyzer,
+    "GoogleAI_CompatibilityChecker":      GoogleAI_CompatibilityChecker,
+    "GoogleAI_LoRATrainingAnalyzer":      GoogleAI_LoRATrainingAnalyzer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "GoogleAI_TextNode": "🔤 Google AI - Text Generator",
-    "GoogleAI_TextVisionNode": "👁️ Google AI - Vision Analyzer",
-    "GoogleAI_ImageNode": "🎨 Google AI - Image Generator",
-    "GoogleAI_ImageBatchNode": "🖼️ Google AI - Image Batch",
-    "GoogleAI_VideoGenerator": "🎬 Google AI - Video Generator (Veo 3.1)",
+    "GoogleAI_TextNode":           "🔤 Google AI - Text Generator",
+    "GoogleAI_TextVisionNode":     "👁️ Google AI - Vision Analyzer (Nano Banana)",
+    "GoogleAI_ImageNode":          "🎨 Google AI - Image Generator (Nano Banana)",
+    "GoogleAI_ImageBatchNode":     "🖼️ Google AI - Image Batch",
+    "GoogleAI_VideoGenerator":     "🎬 Google AI - Video Generator (Veo 3.1)",
     "GoogleAI_VideoInterpolation": "🔀 Google AI - Video Interpolation",
-    "GoogleAI_VideoStoryboard": "📖 Google AI - Video Storyboard",
+    "GoogleAI_VideoStoryboard":    "📖 Google AI - Video Storyboard",
     "GoogleAI_ModelArchitectureDetector": "🔍 Google AI - Architecture Detector",
-    "GoogleAI_TriggerWordExtractor": "🏷️ Google AI - Trigger Word Extractor",
-    "GoogleAI_WorkflowAnalyzer": "📋 Google AI - Workflow Analyzer",
-    "GoogleAI_CompatibilityChecker": "✅ Google AI - Compatibility Checker",
-    "GoogleAI_LoRATrainingAnalyzer": "📊 Google AI - Training Analyzer",
+    "GoogleAI_TriggerWordExtractor":      "🏷️ Google AI - Trigger Word Extractor",
+    "GoogleAI_WorkflowAnalyzer":          "📋 Google AI - Workflow Analyzer",
+    "GoogleAI_CompatibilityChecker":      "✅ Google AI - Compatibility Checker",
+    "GoogleAI_LoRATrainingAnalyzer":      "📊 Google AI - Training Analyzer",
 }
 
 # ============================================================================
@@ -79,9 +85,10 @@ try:
     async def health_check(request):
         return web.json_response({
             "status": "ok",
-            "version": "2.0.1",
+            "version": "2.4.2",
             "nodes": len(NODE_CLASS_MAPPINGS),
             "suites": ["text", "image", "video", "diagnostic"],
+            "image_models": ["nano-banana-pro", "nano-banana", "imagen-4", "imagen-3"],
         })
 
     logger.info("[GoogleAI] Ruta registrada: /google-ai/health")
@@ -95,11 +102,12 @@ except (ImportError, AttributeError) as e:
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
 print(
-    f"\n{'='*60}\n"
-    f"  ✅ ComfyUI_GoogleAI V2.0.1 — {len(NODE_CLASS_MAPPINGS)} nodos\n"
-    f"  🔤 Texto  | 👁️ Vision | 🎨 Imagen 4 | 🎬 Veo 3.1\n"
-    f"  🔍 Diagnóstico (5 nodos)\n"
+    f"\n{'='*65}\n"
+    f"  ✅ ComfyUI_GoogleAI V2.4.2 Ultra — {len(NODE_CLASS_MAPPINGS)} nodos\n"
+    f"  🔤 Texto  | 👁️ Vision (Nano Banana)\n"
+    f"  🎨 Imagen: Nano Banana Pro/Flash + Imagen 4 (5 pines ref)\n"
+    f"  🎬 Veo 3.1 + 🔊 Audio nativo | 🔍 Diagnóstico (5 nodos)\n"
     f"  ⚠️  Audio (Lyria) removido — sin API pública aún\n"
     f"  💡 Error Explainer → ComfyUI_UniversalErrorExplainer\n"
-    f"{'='*60}\n"
+    f"{'='*65}\n"
 )
