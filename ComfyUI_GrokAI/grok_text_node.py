@@ -1,210 +1,158 @@
-"""
-grok_text_node.py — Nodo de Visión y Razonamiento Multimodal
-=============================================================
-Nodos incluidos:
-  - GrokTextNode           (v1 — legado, mantiene retrocompatibilidad)
-  - Grok_Multimodal_Vision (v2 — analista visual con hasta 5 imágenes + video)
+# ==============================================================================
+# grok_text_node.py — Nodos de Texto y Visión de ComfyUI_Grok
+# ==============================================================================
+# Contiene el nodo original V1 (Legado) y el nuevo nodo V2 Multimodal.
+# Integra fallback automático a la variable de entorno XAI_API_KEY.
+# ==============================================================================
 
-Autor: Prompt Models Studio — xAI Integration Layer v2.0
-"""
-
+import os
 import logging
-import torch
-from typing import Optional
+from .grok_core import GrokCore
 
-from .grok_core import (
-    PayloadRouter,
-    build_multimodal_message,
-    sample_video_frames,
-    DEFAULT_CHAT_MODEL,
-)
+log = logging.getLogger("ComfyUI_GrokText")
 
-log = logging.getLogger("ComfyUI_Grok")
-
-# Modelos disponibles para el widget de selección
-CHAT_MODELS = [
-    "grok-4",
-    "grok-4-mini",
-    "grok-3",
-    "grok-3-mini",
-    "grok-beta",
+# Modelos disponibles basados en la API de xAI (2026)
+GROK_TEXT_MODELS = [
+    "grok-4.1-fast-reasoning", # Último modelo (de tu README)
+    "grok-2-vision-1212",      # Modelo estable con visión
+    "grok-2-1212",             # Modelo estable de texto
+    "grok-vision-beta",
 ]
 
-
-# ══════════════════════════════════════════════
-# V1 — NODO LEGADO (No modificar su clase ni registro)
-# Mantiene compatibilidad con workflows .json existentes
-# ══════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. NODO LEGADO (V1) - NO MODIFICAR ESTRUCTURA PARA NO ROMPER WORKFLOWS
+# ══════════════════════════════════════════════════════════════════════════════
 class GrokTextNode:
     """
-    [LEGADO v1.0] Nodo de texto simple para Grok.
-    Mantenido para retrocompatibilidad — no usar en workflows nuevos.
+    Nodo original V1. Solo acepta texto.
+    Se mantiene por estricta retrocompatibilidad.
     """
-
-    CATEGORY  = "Grok/Legado"
-    FUNCTION  = "run"
-    RETURN_TYPES  = ("STRING",)
-    RETURN_NAMES  = ("response",)
-
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "api_key":    ("STRING",  {"default": "", "multiline": False}),
-                "prompt":     ("STRING",  {"default": "Hola Grok", "multiline": True}),
-                "model":      (CHAT_MODELS, {"default": "grok-4"}),
-                "temperature":("FLOAT",   {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05}),
-                "max_tokens": ("INT",     {"default": 1024, "min": 64, "max": 8192, "step": 64}),
-            }
-        }
-
-    def run(self, api_key, prompt, model, temperature, max_tokens):
-        try:
-            router = PayloadRouter(api_key)
-            messages = [{"role": "user", "content": prompt}]
-            response = router.chat(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            return (response,)
-        except Exception as e:
-            error_msg = f"[GrokTextNode ERROR] {e}"
-            log.error(error_msg)
-            return (error_msg,)
-
-
-# ══════════════════════════════════════════════
-# V2 — GROK MULTIMODAL VISION
-# Analista visual avanzado con soporte de imágenes + video frames
-# ══════════════════════════════════════════════
-
-class Grok_Multimodal_Vision:
-    """
-    [v2.0] Nodo de visión multimodal.
-
-    Entradas:
-      - Texto / prompt obligatorio
-      - Hasta 5 pines de imagen tipo IMAGE (todos opcionales)
-      - Pin de video (tensor [B, H, W, C] con múltiples frames)
-      - Controles de modelo, temperatura, tokens y nivel de detalle
-
-    Salidas:
-      - STRING con el análisis o descripción generado por Grok-4
-    """
-
-    CATEGORY     = "Grok/Visión"
-    FUNCTION     = "analyze"
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("análisis",)
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "api_key":      ("STRING",   {"default": "", "multiline": False}),
-                "prompt":       ("STRING",   {"default": "Describe y analiza estas imágenes en detalle.", "multiline": True}),
-                "model":        (CHAT_MODELS, {"default": "grok-4"}),
-                "temperature":  ("FLOAT",    {"default": 0.4, "min": 0.0, "max": 2.0, "step": 0.05}),
-                "max_tokens":   ("INT",      {"default": 2048, "min": 64, "max": 16384, "step": 64}),
-                "image_detail": (["high", "low", "auto"], {"default": "high"}),
-                "system_prompt":("STRING",   {
-                    "default": "Eres un analista visual experto. Responde en el idioma del prompt del usuario.",
-                    "multiline": True
-                }),
+                "prompt": ("STRING", {"multiline": True, "default": "Escribe tu prompt aquí..."}),
+                "model": (GROK_TEXT_MODELS, {"default": "grok-2-1212"}),
+                "api_key": ("STRING", {"multiline": False, "default": ""}),
             },
             "optional": {
-                # 5 pines de imagen independientes
-                "image_1":      ("IMAGE",),
-                "image_2":      ("IMAGE",),
-                "image_3":      ("IMAGE",),
-                "image_4":      ("IMAGE",),
-                "image_5":      ("IMAGE",),
-                # Pin de video — tensor con muchos frames en el batch
-                "video_frames": ("IMAGE",),
-                "max_video_frames": ("INT", {"default": 8, "min": 1, "max": 24, "step": 1}),
+                "system_prompt": ("STRING", {"multiline": True, "default": "You are a helpful assistant."}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1}),
             }
         }
 
-    def analyze(
-        self,
-        api_key: str,
-        prompt: str,
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        image_detail: str,
-        system_prompt: str,
-        image_1=None,
-        image_2=None,
-        image_3=None,
-        image_4=None,
-        image_5=None,
-        video_frames=None,
-        max_video_frames: int = 8,
-    ):
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+    FUNCTION = "generate"
+    CATEGORY = "Grok/Legado"
+
+    def generate(self, prompt, model, api_key, system_prompt="", temperature=0.7):
+        # Fallback a variable de entorno si el usuario deja el campo vacío
+        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+        if not key:
+            return ("⚠️ Error: API Key de xAI no encontrada en el nodo ni en entorno.",)
+
         try:
-            router = PayloadRouter(api_key)
-
-            # ── Recopilar imágenes conectadas ────────────────────────
-            # Los pines de imagen envían el primer frame del batch
-            image_tensors: list[torch.Tensor] = []
-            for img_pin in [image_1, image_2, image_3, image_4, image_5]:
-                if img_pin is not None:
-                    # Extraer solo el primer frame si hay batch
-                    single = img_pin[[0]] if img_pin.ndim == 4 else img_pin.unsqueeze(0)
-                    image_tensors.append(single)
-
-            # ── Procesar video frames con muestreo inteligente ───────
-            if video_frames is not None and video_frames.shape[0] > 0:
-                total_frames = video_frames.shape[0]
-                log.info(f"[Grok Vision] Video detectado: {total_frames} frames. "
-                         f"Muestreando hasta {max_video_frames}...")
-
-                sampled = sample_video_frames(
-                    video_frames,
-                    max_frames=max_video_frames,
-                    strategy="uniform"
-                )
-                image_tensors.extend(sampled)
-
-                # Añadir contexto de video al prompt
-                video_context = (
-                    f"\n\n[CONTEXTO: Se proporcionan {len(sampled)} frames "
-                    f"muestreados de un video de {total_frames} frames totales. "
-                    f"Analiza la secuencia temporal y el movimiento.]"
-                )
-                prompt = prompt + video_context
-
-            # ── Log informativo ──────────────────────────────────────
-            total_images = len(image_tensors)
-            if total_images > 0:
-                log.info(f"[Grok Vision] Enviando {total_images} imagen(es) a {model}")
-            else:
-                log.info(f"[Grok Vision] Modo texto puro → {model}")
-
-            # ── Construir mensaje multimodal ─────────────────────────
-            user_message = build_multimodal_message(
-                role="user",
-                text=prompt,
-                image_tensors=image_tensors if image_tensors else None,
-                image_detail=image_detail
-            )
-
-            # ── Llamada a la API ─────────────────────────────────────
-            response = router.chat(
-                messages=[user_message],
+            core = GrokCore(key)
+            res = core.chat_completion(
                 model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system_prompt=system_prompt
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature
             )
 
-            return (response,)
+            if res.get("error"):
+                return (f"❌ API Error: {res.get('message')}",)
 
+            # Extraer respuesta
+            text = res["choices"][0]["message"]["content"]
+            return (text,)
+            
         except Exception as e:
-            error_msg = f"[Grok_Multimodal_Vision ERROR] {e}"
-            log.error(error_msg)
-            return (error_msg,)
+            log.error(f"[GrokTextNode] Fallo: {str(e)}")
+            return (f"❌ Error interno: {str(e)}",)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. NODO MULTIMODAL (V2.0) - EL NUEVO ANALISTA VISUAL
+# ══════════════════════════════════════════════════════════════════════════════
+class Grok_Multimodal_Vision:
+    """
+    Nodo V2: Soporta hasta 5 imágenes de entrada.
+    Convierte tensores a Base64 y enruta automáticamente la petición
+    multimodal en `grok_core.py`.
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": "Describe detalladamente qué hay en esta imagen."}),
+                "model": (GROK_TEXT_MODELS, {"default": "grok-2-vision-1212"}),
+                "api_key": ("STRING", {"multiline": False, "default": ""}),
+            },
+            "optional": {
+                "system_prompt": ("STRING", {"multiline": True, "default": "Eres un experto analista visual de IA."}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1}),
+                "reasoning_effort": (["Off", "low", "medium", "high"], {"default": "Off"}),
+                # PINES DE IMAGEN (Se mostrarán en ComfyUI para conectar)
+                "image_1": ("IMAGE",),
+                "image_2": ("IMAGE",),
+                "image_3": ("IMAGE",),
+                "image_4": ("IMAGE",),
+                "image_5": ("IMAGE",),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("analysis",)
+    FUNCTION = "analyze"
+    CATEGORY = "xAI/Grok"
+
+    def analyze(self, prompt, model, api_key, system_prompt="", temperature=0.7, reasoning_effort="Off",
+                image_1=None, image_2=None, image_3=None, image_4=None, image_5=None):
+        
+        # 1. Resolución de API Key
+        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+        if not key:
+            return ("⚠️ Error: API Key de xAI requerida.",)
+
+        try:
+            core = GrokCore(key)
+            
+            # 2. Recolección y conversión de imágenes conectadas
+            images_b64 = []
+            connected_images = [image_1, image_2, image_3, image_4, image_5]
+            
+            for idx, img_tensor in enumerate(connected_images, 1):
+                if img_tensor is not None:
+                    b64_str = core.tensor_to_base64(img_tensor)
+                    if b64_str:
+                        images_b64.append(b64_str)
+                        log.info(f"[Grok_Multimodal] Imagen {idx} convertida con éxito.")
+
+            # 3. Preparar parámetros extra (como el nuevo reasoning_effort)
+            kwargs = {"temperature": temperature}
+            if reasoning_effort != "Off":
+                kwargs["reasoning_effort"] = reasoning_effort
+
+            # 4. Enviar al motor core
+            log.info(f"[Grok_Multimodal] Ejecutando petición. Imágenes adjuntas: {len(images_b64)}")
+            res = core.chat_completion(
+                model=model,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                images_b64=images_b64,
+                **kwargs
+            )
+
+            # 5. Manejo de respuesta
+            if res.get("error"):
+                return (f"❌ API Error: {res.get('message')}",)
+
+            analysis_text = res["choices"][0]["message"]["content"]
+            return (analysis_text,)
+            
+        except Exception as e:
+            err_msg = f"❌ Error en nodo de visión: {str(e)}"
+            log.error(err_msg)
+            return (err_msg,)
