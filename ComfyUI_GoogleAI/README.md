@@ -1,8 +1,8 @@
-# 🚀 ComfyUI_GoogleAI V2.4.2 Ultra — Suite Integral de Google AI
+# 🚀 ComfyUI_GoogleAI V2.4.3 — Suite Integral de Google AI
 
 > **Nano Banana Pro/Flash** (Imagen Multimodal) · **Imagen 4** (Generación Pura) · **Veo 3.1** (Video + Audio) · **Gemini 3.1 Pro** (Texto/Diagnóstico)
 
-![Version](https://img.shields.io/badge/Version-2.4.2-blue)
+![Version](https://img.shields.io/badge/Version-2.4.3-blue)
 ![Nodes](https://img.shields.io/badge/Nodos-12-green)
 
 > ⚠️ **Audio (Lyria 3)** removido — `lyria-3` no tiene endpoint de API pública (Feb 2026). Disponible solo en la app de Gemini. Se reintegrará cuando Google abra la API.
@@ -11,7 +11,7 @@
 
 ## 📑 Tabla de Contenidos
 
-1. [Novedades V2.4.2](#-novedades-v242-ultra)
+1. [Novedades V2.4.3](#-novedades-v243)
 2. [Instalación](#-instalación)
 3. [Configurar API Key](#-configurar-api-key)
 4. [Nodos: Texto](#-texto--gemini-31-pro)
@@ -20,21 +20,28 @@
 7. [Nodos: Diagnóstico](#-diagnóstico--gemini-31-pro)
 8. [Modelos disponibles](#-modelos-disponibles)
 9. [Notas Técnicas](#-notas-técnicas)
+10. [Solución de Problemas](#-solución-de-problemas)
 
 ---
 
-## 🆕 Novedades V2.4.2 Ultra
+## 🆕 Novedades V2.4.3
 
-- **🎨 Nano Banana Pro/Flash** — Nuevo routing en `GoogleAI_ImageNode`:
-  - `gemini-3-pro-image-preview` (Nano Banana Pro): hasta 14 referencias, hasta 4K
-  - `gemini-2.5-flash-image` (Nano Banana): velocidad, hasta 1K
-  - 5 pines de imagen de referencia para estilo, personaje o composición
-  - Routing automático: Nano Banana → `generateContent` | Imagen 4 → `generateImages`
-- **📐 Size Presets inteligentes** — Mapeo automático `size_preset → aspectRatio + resolution_hint`
-- **🔒 Validación 4K** — Solo Nano Banana Pro soporta 4K; downgrade automático a 2K en otros modelos
-- **🔊 Audio en TODOS los nodos de video** — VideoInterpolation y VideoStoryboard ahora incluyen output `AUDIO` (pista nativa Veo 3.1 o silencio en Veo 2.0)
-- **🛡️ Blindaje de errores** — Imagen roja 512×512 con texto de error en todos los nodos (sin crasheos)
-- **📋 Modelos consistentes** — Strings de API actualizados y unificados (Feb 2026)
+### 🔧 Fixes Críticos
+- **Video negro resuelto** — Los videos de Veo 3.1 usan códec HEVC/VP9 que torchvision y OpenCV no decodifican en sus builds estándar. Ahora se transcodifica automáticamente a H.264 via ffmpeg antes de extraer frames.
+- **Audio funcional** — `video_bytes_to_audio()` reescrito completamente. Usa ffmpeg directo (sin torchaudio ni moviepy) para extraer la pista de audio como WAV PCM → tensor. Funciona en cualquier entorno con ffmpeg.
+- **Diagnóstico automático** — El tensor de video ahora reporta `min/max/mean` en consola. Si detecta frames negros (`max < 0.01`) alerta con la causa probable.
+- **Fallback graceful** — Si ffmpeg no está instalado, intenta decodificar directo (puede fallar con HEVC) en vez de crashear.
+
+### 📦 Nuevo: `install.py`
+- Instala `ffmpeg` automáticamente en Docker/ComfyDeploy durante setup del nodo.
+- Instala `scipy` para lectura WAV optimizada (fallback manual si no está).
+- Idempotente: si ya está instalado, no hace nada.
+
+### Novedades V2.4.2 (anteriores)
+- **Nano Banana Pro/Flash** — 5 pines de referencia, routing automático
+- **Size Presets inteligentes** — Mapeo `size_preset → aspectRatio + resolution_hint`
+- **Validación 4K** — Downgrade automático a 2K en modelos no-Pro
+- **Audio en todos los nodos de video** — Output `AUDIO` en VideoInterpolation y VideoStoryboard
 
 ---
 
@@ -45,6 +52,29 @@ cd ComfyUI/custom_nodes/
 git clone https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git ComfyUI_GoogleAI
 cd ComfyUI_GoogleAI
 pip install -r requirements.txt
+```
+
+### ⚠️ Requisito: ffmpeg
+
+ffmpeg es **necesario** para video (Veo 3.1) y extracción de audio. Se instala automáticamente via `install.py` en Docker/ComfyDeploy.
+
+**Instalación manual (si es necesario):**
+```bash
+# Linux / Docker
+apt install ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Windows
+choco install ffmpeg
+# O descarga de: https://ffmpeg.org/download.html
+```
+
+**Verificar instalación:**
+```bash
+ffmpeg -version
+ffprobe -version
 ```
 
 > 💡 **Explicador de Errores:** Separado al plugin universal [ComfyUI_UniversalErrorExplainer](https://github.com/cdanielp/ComfyUI_UniversalErrorExplainer).
@@ -147,7 +177,9 @@ Error HTTP 400 (seguridad) → retorna imagen roja 512×512 sin crashear.
 
 > ⚡ **FPS de salida: 24.** Configura VHS Video Combine a **24 FPS**.
 >
-> 🔊 **Audio nativo:** Todos los nodos de video ahora incluyen output `AUDIO` (Veo 3.1). Veo 2.0 genera silencio automáticamente.
+> 🔊 **Audio nativo:** Todos los nodos de video incluyen output `AUDIO` (Veo 3.1). Veo 2.0 genera silencio automáticamente.
+>
+> 🛠️ **Transcodificación automática:** El video se transcodifica de HEVC/VP9 a H.264 via ffmpeg antes de extraer frames. Requiere ffmpeg instalado.
 
 **Resoluciones:** 1080p (16:9 / 9:16 / 1:1) y 4K (16:9 / 9:16)
 **Duraciones:** 4, 6, 8 segundos | **Costo:** $0.40 USD/segundo (Standard)
@@ -238,14 +270,45 @@ Error HTTP 400 (seguridad) → retorna imagen roja 512×512 sin crashear.
 
 ---
 
+## 🔧 Solución de Problemas
+
+### Video negro (pantalla negra)
+**Causa:** El códec del video de Veo 3.1 (HEVC/VP9) no es compatible con torchvision/OpenCV.
+**Solución:** Instalar ffmpeg. V2.4.3 transcodifica automáticamente a H.264.
+```bash
+# Verificar
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name video.mp4
+
+# En consola de ComfyUI deberías ver:
+# [Transcode] Códec original: vp9 | pix_fmt: yuv420p | 1920x1080
+# [Transcode] OK → 13909KB → 12000KB (H.264)
+# [Video (TorchVision)] 192 frames, 1920x1080 | min=0.003 max=0.984 mean=0.41
+```
+
+### Audio silencioso / dummy
+**Causa:** ffmpeg no instalado o el video no tiene pista de audio.
+**Verificar en consola:**
+- `[VideoAudio] Audio OK: torch.Size([1, 2, 352800]) @ 44100Hz` → ✅ Funciona
+- `[VideoAudio] ffmpeg no disponible → dummy silencioso` → Instalar ffmpeg
+- `[VideoAudio] Sin pista de audio en el MP4 → dummy` → El video no tiene audio (normal en Veo 2.0)
+
+### ffmpeg no se instala en Docker
+**Solución:** Agregar al Dockerfile:
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+```
+
+---
+
 ## 📝 Notas Técnicas
 
 - **Cero SDKs** — Todo usa `requests` HTTP puras (imagen/texto) y `aiohttp` async (video)
 - **Tensores estándar** — `[B, H, W, C]` float `0.0-1.0`
 - **Video 24 FPS** — Configurar en VHS Video Combine
+- **Transcodificación** — HEVC/VP9/AV1 → H.264/yuv420p via ffmpeg antes de decodificar
+- **Audio** — Extracción via ffmpeg → WAV PCM 16-bit → tensor (sin torchaudio/moviepy)
 - **Imagen API** — Nano Banana usa `generateContent` con `responseModalities:IMAGE`; Imagen 4/3 usa `generateImages`
-- **Video API** — Usa endpoint `generateVideos` con polling asíncrono
-- **Audio nativo** — Veo 3.1 incluye pista de audio en el MP4; extraída con `torchaudio`
+- **Video API** — Usa endpoint `predictLongRunning` con polling asíncrono
 - **Error visual** — Todos los nodos de imagen y video retornan imagen roja 512×512 en caso de error
 - **4K automático** — Modelos sin soporte 4K hacen downgrade silencioso a 2K
 - **Retrocompatible** — Clases originales intactas, nombres de nodo sin cambios

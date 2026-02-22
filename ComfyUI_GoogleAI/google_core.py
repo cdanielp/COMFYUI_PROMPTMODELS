@@ -8,6 +8,9 @@ Cambios V2.4.3:
 - FIX CRÍTICO: video_bytes_to_tensor() ahora transcodifica a H.264
   antes de decodificar frames. Resuelve video negro con códecs
   HEVC/VP9 de Veo 3.1 que torchvision/OpenCV no decodifican.
+- FIX AUDIO: video_bytes_to_audio() reescrito con ffmpeg directo.
+  Elimina dependencia de torchaudio/moviepy. Extrae audio via
+  ffmpeg → WAV PCM → tensor. Funciona en cualquier entorno con ffmpeg.
 - Diagnóstico automático: detecta frames negros y reporta códec.
 - Limpieza robusta de archivos temporales (original + transcodificado).
 
@@ -131,20 +134,22 @@ def _make_dummy_audio() -> Dict:
 # ============================================================================
 # UTILIDAD — Transcodificación segura a H.264
 # ============================================================================
-def _transcode_to_h264(input_path: str) -> str:
+def _transcode_to_h264(input_path: str) -> Optional[str]:
     """
     Transcodifica cualquier MP4 a H.264/yuv420p usando ffmpeg.
-    Retorna la ruta del archivo transcodificado.
-    Lanza RuntimeError si ffmpeg no está disponible o falla.
+    Retorna la ruta del archivo transcodificado, o None si ffmpeg
+    no está disponible (permite fallback a decodificación directa).
     """
     if not shutil.which("ffmpeg"):
-        raise RuntimeError(
-            "❌ ffmpeg no encontrado en PATH. Es necesario para decodificar "
-            "videos de Veo 3.1 (códec HEVC/VP9). Instálalo con:\n"
-            "  apt install ffmpeg  (Linux)\n"
+        logger.warning(
+            "⚠️ [Transcode] ffmpeg no encontrado en PATH. "
+            "Se intentará decodificar directamente (puede fallar con HEVC/VP9). "
+            "Para mejor compatibilidad instala ffmpeg:\n"
+            "  apt install ffmpeg  (Linux/Docker)\n"
             "  brew install ffmpeg (macOS)\n"
             "  choco install ffmpeg (Windows)"
         )
+        return None  # Señal para intentar decodificación directa
 
     h264_path = input_path.replace(".mp4", "_h264.mp4")
 
@@ -677,46 +682,86 @@ class GoogleAICore:
             raise RuntimeError(f"Timeout: La generación de video excedió {max_wait}s.")
 
     # ========================================================================
-    # AUDIO — Extracción de pista nativa del MP4 (Veo 3.1)
+    # AUDIO — Extracción via ffmpeg directo (sin torchaudio, sin moviepy)
     # ========================================================================
     @staticmethod
     def video_bytes_to_audio(video_bytes: bytes) -> Dict:
         """
-        Extrae la pista de audio de un MP4 de Veo 3.1.
-        Si no hay pista, torchaudio falla, o el audio es silencio → dummy.
+        Extrae audio del MP4 de Veo 3.1 usando ffmpeg → WAV → tensor.
+        Sin dependencias extra: solo ffmpeg (sistema) + numpy/torch.
+        Si ffmpeg no está o el video no tiene audio → dummy silencioso.
         """
-        tmp_path = None
+        tmp_video = None
+        tmp_wav = None
         try:
-            import torchaudio
+            if not shutil.which("ffmpeg"):
+                logger.warning("[VideoAudio] ffmpeg no disponible → dummy silencioso.")
+                return _make_dummy_audio()
 
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                tmp.write(video_bytes)
-                tmp_path = tmp.name
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+                f.write(video_bytes)
+                tmp_video = f.name
 
-            waveform, sample_rate = torchaudio.load(tmp_path)
+            tmp_wav = tmp_video.replace(".mp4", "_audio.wav")
 
-            if waveform.dim() == 2:
-                waveform = waveform.unsqueeze(0)
+            # Extraer audio como WAV PCM 16-bit stereo 44100Hz
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", tmp_video,
+                    "-vn", "-acodec", "pcm_s16le",
+                    "-ar", "44100", "-ac", "2",
+                    tmp_wav,
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
 
-            if waveform.abs().max() < 1e-6:
+            if result.returncode != 0 or not os.path.exists(tmp_wav):
+                logger.info("[VideoAudio] Sin pista de audio en el MP4 → dummy.")
+                return _make_dummy_audio()
+
+            wav_size = os.path.getsize(tmp_wav)
+            if wav_size < 1024:
+                logger.info("[VideoAudio] Audio vacío → dummy.")
+                return _make_dummy_audio()
+
+            # Leer WAV — intentar scipy, fallback a lectura manual
+            sample_rate = 44100
+            try:
+                from scipy.io import wavfile
+                sample_rate, data = wavfile.read(tmp_wav)
+            except ImportError:
+                # Lectura manual de WAV PCM 16-bit (skip 44-byte header)
+                with open(tmp_wav, "rb") as wf:
+                    wf.read(44)
+                    raw = wf.read()
+                data = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
+
+            # int16 → float32 normalizado
+            audio = data.astype(np.float32) / 32768.0
+
+            if audio.ndim == 1:
+                audio = audio[:, np.newaxis]
+
+            if np.max(np.abs(audio)) < 1e-6:
                 logger.info("[VideoAudio] Pista silenciosa → dummy.")
                 return _make_dummy_audio()
 
-            logger.info(f"[VideoAudio] Audio extraído: {waveform.shape} @ {sample_rate}Hz")
+            # [samples, channels] → [1, channels, samples] para ComfyUI
+            waveform = torch.from_numpy(audio.T).unsqueeze(0)
+
+            logger.info(f"[VideoAudio] Audio OK: {waveform.shape} @ {sample_rate}Hz")
             return {"waveform": waveform, "sample_rate": sample_rate}
 
-        except ImportError:
-            logger.warning("[VideoAudio] torchaudio no disponible → dummy.")
-            return _make_dummy_audio()
         except Exception as e:
-            logger.warning(f"[VideoAudio] No se pudo extraer audio ({e}) → dummy.")
+            logger.warning(f"[VideoAudio] Error extrayendo audio ({e}) → dummy.")
             return _make_dummy_audio()
         finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+            for p in [tmp_video, tmp_wav]:
+                if p:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
 
     # ========================================================================
     # CONVERSIÓN — Tensores ComfyUI
@@ -773,11 +818,15 @@ class GoogleAICore:
 
             logger.info(f"[Video] Archivo temporal: {tmp_path} ({len(video_bytes)/1024:.0f}KB)")
 
-            # 2. TRANSCODIFICAR a H.264 (el fix principal)
-            h264_path = _transcode_to_h264(tmp_path)
+            # 2. TRANSCODIFICAR a H.264 (si ffmpeg está disponible)
+            transcode_result = _transcode_to_h264(tmp_path)
 
-            # Usar el archivo transcodificado (puede ser el mismo si ya era H.264)
-            decode_path = h264_path
+            if transcode_result is not None:
+                h264_path = transcode_result
+                decode_path = h264_path
+            else:
+                # ffmpeg no disponible → intentar decodificar el original directo
+                decode_path = tmp_path
 
             # 3. Decodificar frames
             # Intento 1: TorchVision
@@ -805,11 +854,17 @@ class GoogleAICore:
                 )
 
                 if fmax < 0.01:
-                    logger.error(
-                        "⚠️ [Video] FRAMES NEGROS DETECTADOS (max < 0.01). "
-                        "La transcodificación no resolvió el problema. "
-                        "Verifica que el MP4 original no esté corrupto."
-                    )
+                    if transcode_result is None:
+                        logger.error(
+                            "⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible. "
+                            "El códec del video (probable HEVC/VP9) no es compatible "
+                            "con torchvision. SOLUCIÓN: instalar ffmpeg en el entorno."
+                        )
+                    else:
+                        logger.error(
+                            "⚠️ [Video] FRAMES NEGROS después de transcodificar. "
+                            "El MP4 original podría estar corrupto."
+                        )
 
                 return frames_t
 
@@ -853,10 +908,17 @@ class GoogleAICore:
                 )
 
                 if fmax < 0.01:
-                    logger.error(
-                        "⚠️ [Video] FRAMES NEGROS DETECTADOS (max < 0.01). "
-                        "Ni torchvision ni OpenCV pudieron decodificar correctamente."
-                    )
+                    if transcode_result is None:
+                        logger.error(
+                            "⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible. "
+                            "El códec del video no es compatible con OpenCV. "
+                            "SOLUCIÓN: instalar ffmpeg en el entorno."
+                        )
+                    else:
+                        logger.error(
+                            "⚠️ [Video] FRAMES NEGROS después de transcodificar. "
+                            "El MP4 original podría estar corrupto."
+                        )
 
                 return tensor
 
