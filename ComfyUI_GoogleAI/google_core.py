@@ -531,38 +531,42 @@ class GoogleAICore:
                         )
                     resp_data = poll_data.get("response", {})
 
-                    # Formato: generateVideoResponse.generatedSamples
+                    # --- DEBUG POR SI ACASO ---
+                    logger.warning(f"[DEBUG VEO] LLAVES EN LA RESPUESTA DE GOOGLE: {list(resp_data.keys())}")
+
+                    # 1. FORMATO PREDICT (Vertex/AI Studio predictLongRunning)
+                    predictions = resp_data.get("predictions", [])
+                    if predictions:
+                        first_pred = predictions[0]
+                        if "bytesBase64Encoded" in first_pred:
+                            logger.info("[Veo] Video extraído exitosamente desde Base64 nativo.")
+                            return base64.b64decode(first_pred["bytesBase64Encoded"])
+                        if "video" in first_pred and "uri" in first_pred["video"]:
+                            video_uri = first_pred["video"]["uri"]
+                            async with session.get(f"{video_uri}&key={api_key}", timeout=180) as vid_resp:
+                                vid_resp.raise_for_status()
+                                return await vid_resp.read()
+
+                    # 2. FORMATO generateVideoResponse (SDK Antiguo)
                     gen_response = resp_data.get("generateVideoResponse", {})
                     samples = gen_response.get("generatedSamples", [])
                     if samples:
                         video_uri = samples[0].get("video", {}).get("uri", "")
                         if video_uri:
-                            async with session.get(
-                                f"{video_uri}&key={api_key}",
-                                timeout=aiohttp.ClientTimeout(total=180),
-                            ) as vid_resp:
+                            async with session.get(f"{video_uri}&key={api_key}", timeout=180) as vid_resp:
                                 vid_resp.raise_for_status()
                                 return await vid_resp.read()
 
-                    # Formato alternativo: generatedVideos
+                    # 3. FORMATO alternativo generatedVideos
                     generated = resp_data.get("generatedVideos", [])
                     if generated:
                         video_uri = generated[0].get("video", {}).get("uri", "")
                         if video_uri:
-                            async with session.get(
-                                f"{video_uri}&key={api_key}",
-                                timeout=aiohttp.ClientTimeout(total=180),
-                            ) as vid_resp:
+                            async with session.get(f"{video_uri}&key={api_key}", timeout=180) as vid_resp:
                                 vid_resp.raise_for_status()
                                 return await vid_resp.read()
 
-                    # Inline data (caso raro)
-                    for cand in resp_data.get("candidates", []):
-                        for part in cand.get("content", {}).get("parts", []):
-                            if "inlineData" in part:
-                                return base64.b64decode(part["inlineData"]["data"])
-
-                    raise RuntimeError("Operación completada pero no se encontró video.")
+                    raise RuntimeError("Operación completada pero no se encontró la ruta del video en el JSON.")
 
                 metadata = poll_data.get("metadata", {})
                 state = metadata.get("state", "PROCESSING")
