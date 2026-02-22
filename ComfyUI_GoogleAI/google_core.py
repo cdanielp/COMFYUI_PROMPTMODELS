@@ -38,7 +38,7 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 GEMINI_TEXT_ENDPOINT     = "{base}/models/{model}:generateContent?key={key}"
 IMAGEN_GENERATE_ENDPOINT = "{base}/models/{model}:generateImages?key={key}"
-VEO_GENERATE_ENDPOINT    = "{base}/models/{model}:generateVideos?key={key}"
+VEO_GENERATE_ENDPOINT    = "{base}/models/{model}:predictLongRunning?key={key}"
 VEO_POLL_ENDPOINT        = "{base}/{operation_name}?key={key}"
 
 # Modelos por defecto — strings exactos de la API (Feb 2026)
@@ -433,7 +433,7 @@ class GoogleAICore:
         max_wait = 300 + int(duration_seconds * 60 * RESOLUTION_MULTIPLIER.get(resolution, 1.0))
         logger.info(f"[Veo] Timeout máximo calculado: {max_wait}s (resolución={resolution}, duración={duration_seconds}s)")
 
-        video_config: Dict[str, Any] = {
+        parameters: Dict[str, Any] = {
             "resolution": resolution,
             "aspectRatio": aspect_ratio,
             "durationSeconds": duration_seconds,
@@ -441,27 +441,31 @@ class GoogleAICore:
         }
 
         if reference_images_b64:
-            video_config["referenceImages"] = [
+            parameters["referenceImages"] = [
                 {
-                    "image": {"imageBytes": b64, "mimeType": "image/png"},
+                    "image": {"bytesBase64Encoded": b64, "mimeType": "image/png"},
                     "referenceType": "asset",
                 }
                 for b64 in reference_images_b64
             ]
 
         if last_frame_b64:
-            video_config["lastFrame"] = {
-                "imageBytes": last_frame_b64,
+            parameters["lastFrame"] = {
+                "bytesBase64Encoded": last_frame_b64,
                 "mimeType": "image/png",
             }
 
-        payload: Dict[str, Any] = {"prompt": prompt, "config": video_config}
-
+        instance: Dict[str, Any] = {"prompt": prompt}
         if init_images_b64:
-            payload["image"] = {
-                "imageBytes": init_images_b64[0],
+            instance["image"] = {
+                "bytesBase64Encoded": init_images_b64[0],
                 "mimeType": "image/png",
             }
+
+        payload: Dict[str, Any] = {
+            "instances": [instance],
+            "parameters": parameters
+        }
 
         headers = {"Content-Type": "application/json"}
 
