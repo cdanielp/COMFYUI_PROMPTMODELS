@@ -649,47 +649,68 @@ class GoogleAICore:
     @staticmethod
     def video_bytes_to_tensor(video_bytes: bytes) -> torch.Tensor:
         """Convierte bytes MP4 a tensor [B, H, W, C]. 24 FPS asumido."""
-        import cv2
-
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp.write(video_bytes)
                 tmp_path = tmp.name
 
-            cap = cv2.VideoCapture(tmp_path)
-            if not cap.isOpened():
-                raise RuntimeError("No se pudo abrir el video.")
+            # Intentar decodificar con torchvision (mucho más estable para tensores)
+            try:
+                import torchvision.io
+                frames_t, audio_t, info = torchvision.io.read_video(tmp_path, pts_unit="sec", output_format="TCHW")
 
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                frames.append(rgb)
-                del rgb
-            cap.release()
+                # Convertir [T, C, H, W] a [T, H, W, C] para ComfyUI
+                frames_t = frames_t.permute(0, 2, 3, 1)
 
-            if not frames:
-                raise RuntimeError("El video no contiene frames.")
+                # Normalizar a float32 entre 0.0 y 1.0
+                if frames_t.dtype == torch.uint8:
+                    frames_t = frames_t.float() / 255.0
 
-            stacked = np.stack(frames, axis=0)
-            tensor = torch.from_numpy(stacked)
-            del frames, stacked
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            logger.info(
-                f"[Video] {tensor.shape[0]} frames, "
-                f"{tensor.shape[2]}x{tensor.shape[1]}, 24 FPS asumido"
-            )
-            return tensor
+                logger.info(f"[Video (TorchVision)] {frames_t.shape[0]} frames, {frames_t.shape[2]}x{frames_t.shape[1]}")
+                return frames_t
+
+            except Exception as tv_e:
+                logger.warning(f"[Video] Falló torchvision, intentando con OpenCV: {tv_e}")
+
+                # Fallback: OpenCV estructurado rigurosamente
+                import cv2
+                cap = cv2.VideoCapture(tmp_path)
+                if not cap.isOpened():
+                    raise RuntimeError("No se pudo abrir el video con OpenCV.")
+
+                frames = []
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    # cv2 lee en BGR [H, W, C]. Convertir a RGB
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                    # Convertir a float32 [0-1] inmediatamente
+                    rgb = rgb.astype(np.float32) / 255.0
+                    frames.append(rgb)
+
+                cap.release()
+
+                if not frames:
+                    raise RuntimeError("El video no contiene frames descifrables.")
+
+                # Apilar y crear tensor [T, H, W, C]
+                stacked = np.stack(frames, axis=0)
+                tensor = torch.from_numpy(stacked)
+                logger.info(f"[Video (OpenCV)] {tensor.shape[0]} frames, {tensor.shape[2]}x{tensor.shape[1]}")
+                return tensor
+
         finally:
             if tmp_path:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # ========================================================================
     # UTILIDADES DE IMAGEN
