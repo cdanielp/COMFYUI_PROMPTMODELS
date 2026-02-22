@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
@@ -67,9 +67,9 @@ try:
 except Exception as e:
     print(f"{RED}[GETSETNODE_PRO] ⚠️ Failed: {e}{RESET}")
 
-# --- ComfyUI-GoogleAI (V2.4.2 Ultra) ---
-# Nano Banana Pro/Flash | Imagen 4 | Veo 3.1 + Audio Nativo | Diagnóstico
-# Sistema de 12 nodos con routing dual y soporte 4K.
+# --- ComfyUI-GoogleAI (V2.4.3) ---
+# Fix video negro (H.264 transcode) | Audio ffmpeg | Diagnóstico automático
+# Nano Banana Pro/Flash | Imagen 4 | Veo 3.1 + Audio | Diagnóstico (12 nodos)
 try:
     from .ComfyUI_GoogleAI import (
         NODE_CLASS_MAPPINGS as GOOGLEAI_CLASS,
@@ -77,7 +77,7 @@ try:
     )
     NODE_CLASS_MAPPINGS.update(GOOGLEAI_CLASS)
     NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLEAI_NAMES)
-    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded (V2.4.2 Ultra — 12 Nodos: Nano Banana/Imagen4/Veo3.1/Diag){RESET}")
+    print(f"{GREEN}[ComfyUI-GoogleAI] ✅ Loaded (V2.4.3 — 12 Nodos: Nano Banana/Imagen4/Veo3.1/Diag){RESET}")
 except Exception as e:
     print(f"{RED}[ComfyUI-GoogleAI] ⚠️ Failed: {e}{RESET}")
 
