@@ -1,8 +1,15 @@
 """
-google_core.py - Motor Central de la API de Google AI (V2.4.2)
+google_core.py - Motor Central de la API de Google AI (V2.4.3)
 ==============================================================
 Maneja TODAS las comunicaciones HTTP con la API REST de Google.
 Regla de Oro: CERO SDKs externos. Solo requests/aiohttp puras.
+
+Cambios V2.4.3:
+- FIX CRÍTICO: video_bytes_to_tensor() ahora transcodifica a H.264
+  antes de decodificar frames. Resuelve video negro con códecs
+  HEVC/VP9 de Veo 3.1 que torchvision/OpenCV no decodifican.
+- Diagnóstico automático: detecta frames negros y reporta códec.
+- Limpieza robusta de archivos temporales (original + transcodificado).
 
 Cambios V2.4.2:
 - generate_image_gemini() → nuevo método para Nano Banana Pro/Flash
@@ -23,6 +30,8 @@ import tempfile
 import time
 import threading
 import logging
+import subprocess
+import shutil
 from typing import Optional, Dict, Any, List
 
 import torch
@@ -117,6 +126,98 @@ SYSTEM_PROMPT_TRAINING_ANALYZER = (
 def _make_dummy_audio() -> Dict:
     """Silencio estéreo 1s @ 44100Hz — garantizado para Veo 2.0 o MP4 sin audio."""
     return {"waveform": torch.zeros((1, 2, 44100)), "sample_rate": 44100}
+
+
+# ============================================================================
+# UTILIDAD — Transcodificación segura a H.264
+# ============================================================================
+def _transcode_to_h264(input_path: str) -> str:
+    """
+    Transcodifica cualquier MP4 a H.264/yuv420p usando ffmpeg.
+    Retorna la ruta del archivo transcodificado.
+    Lanza RuntimeError si ffmpeg no está disponible o falla.
+    """
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError(
+            "❌ ffmpeg no encontrado en PATH. Es necesario para decodificar "
+            "videos de Veo 3.1 (códec HEVC/VP9). Instálalo con:\n"
+            "  apt install ffmpeg  (Linux)\n"
+            "  brew install ffmpeg (macOS)\n"
+            "  choco install ffmpeg (Windows)"
+        )
+
+    h264_path = input_path.replace(".mp4", "_h264.mp4")
+
+    # Primero, inspeccionar el códec original para logging
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height,pix_fmt",
+                "-of", "json",
+                input_path,
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if probe.returncode == 0:
+            probe_data = json.loads(probe.stdout)
+            streams = probe_data.get("streams", [{}])
+            if streams:
+                codec = streams[0].get("codec_name", "desconocido")
+                pix_fmt = streams[0].get("pix_fmt", "desconocido")
+                w = streams[0].get("width", "?")
+                h = streams[0].get("height", "?")
+                logger.info(
+                    f"[Transcode] Códec original: {codec} | "
+                    f"pix_fmt: {pix_fmt} | {w}x{h}"
+                )
+                if codec == "h264" and pix_fmt in ("yuv420p", "yuvj420p"):
+                    logger.info("[Transcode] Ya es H.264/yuv420p → skip transcodificación")
+                    return input_path  # No necesita transcodificación
+    except Exception as e:
+        logger.warning(f"[Transcode] ffprobe falló (no crítico): {e}")
+
+    # Transcodificar
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-an",                    # Sin audio (se extrae por separado)
+            "-movflags", "+faststart", # Metadata al inicio para lectura rápida
+            h264_path,
+        ],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    if result.returncode != 0:
+        stderr_snippet = result.stderr[-500:] if result.stderr else "sin detalle"
+        raise RuntimeError(
+            f"❌ ffmpeg falló al transcodificar (exit {result.returncode}):\n"
+            f"{stderr_snippet}"
+        )
+
+    # Verificar que el archivo de salida existe y tiene tamaño razonable
+    if not os.path.exists(h264_path):
+        raise RuntimeError("ffmpeg terminó OK pero no creó archivo de salida.")
+
+    out_size = os.path.getsize(h264_path)
+    in_size = os.path.getsize(input_path)
+    logger.info(
+        f"[Transcode] OK → {in_size/1024:.0f}KB → {out_size/1024:.0f}KB (H.264)"
+    )
+
+    if out_size < 1024:  # Menos de 1KB = algo salió mal
+        raise RuntimeError(
+            f"Archivo transcodificado sospechosamente pequeño ({out_size} bytes). "
+            f"El video original podría estar corrupto."
+        )
+
+    return h264_path
 
 
 class GoogleAICore:
@@ -646,50 +747,91 @@ class GoogleAICore:
             torch.cuda.empty_cache()
         return tensor
 
+    # ========================================================================
+    # VIDEO → TENSOR (V2.4.3 — FIX CRÍTICO: transcodificación H.264)
+    # ========================================================================
     @staticmethod
     def video_bytes_to_tensor(video_bytes: bytes) -> torch.Tensor:
-        """Convierte bytes MP4 a tensor [B, H, W, C]. 24 FPS asumido."""
+        """
+        Convierte bytes MP4 a tensor [B, H, W, C] float32 0.0-1.0.
+
+        V2.4.3: Transcodifica automáticamente a H.264/yuv420p antes de
+        decodificar frames. Esto resuelve el bug de video negro causado
+        por códecs HEVC/VP9/AV1 que torchvision y OpenCV no soportan
+        en sus builds estándar.
+
+        Pipeline: bytes → tmp.mp4 → ffmpeg H.264 → decodificar → tensor
+        """
         tmp_path = None
+        h264_path = None
+
         try:
+            # 1. Escribir bytes a archivo temporal
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp.write(video_bytes)
                 tmp_path = tmp.name
 
-            # Intentar decodificar con torchvision (mucho más estable para tensores)
+            logger.info(f"[Video] Archivo temporal: {tmp_path} ({len(video_bytes)/1024:.0f}KB)")
+
+            # 2. TRANSCODIFICAR a H.264 (el fix principal)
+            h264_path = _transcode_to_h264(tmp_path)
+
+            # Usar el archivo transcodificado (puede ser el mismo si ya era H.264)
+            decode_path = h264_path
+
+            # 3. Decodificar frames
+            # Intento 1: TorchVision
             try:
                 import torchvision.io
-                frames_t, audio_t, info = torchvision.io.read_video(tmp_path, pts_unit="sec", output_format="TCHW")
+                frames_t, audio_t, info = torchvision.io.read_video(
+                    decode_path, pts_unit="sec", output_format="TCHW"
+                )
 
-                # Convertir [T, C, H, W] a [T, H, W, C] para ComfyUI
+                # [T, C, H, W] → [T, H, W, C] para ComfyUI
                 frames_t = frames_t.permute(0, 2, 3, 1)
 
-                # Normalizar a float32 entre 0.0 y 1.0
+                # Normalizar a float32 [0.0, 1.0]
                 if frames_t.dtype == torch.uint8:
                     frames_t = frames_t.float() / 255.0
 
-                logger.info(f"[Video (TorchVision)] {frames_t.shape[0]} frames, {frames_t.shape[2]}x{frames_t.shape[1]}")
+                # --- DIAGNÓSTICO AUTOMÁTICO ---
+                fmin = frames_t.min().item()
+                fmax = frames_t.max().item()
+                fmean = frames_t.mean().item()
+                logger.info(
+                    f"[Video (TorchVision)] {frames_t.shape[0]} frames, "
+                    f"{frames_t.shape[2]}x{frames_t.shape[1]} | "
+                    f"min={fmin:.4f} max={fmax:.4f} mean={fmean:.4f}"
+                )
+
+                if fmax < 0.01:
+                    logger.error(
+                        "⚠️ [Video] FRAMES NEGROS DETECTADOS (max < 0.01). "
+                        "La transcodificación no resolvió el problema. "
+                        "Verifica que el MP4 original no esté corrupto."
+                    )
+
                 return frames_t
 
             except Exception as tv_e:
-                logger.warning(f"[Video] Falló torchvision, intentando con OpenCV: {tv_e}")
+                logger.warning(f"[Video] Falló torchvision: {tv_e} → fallback OpenCV")
 
-                # Fallback: OpenCV estructurado rigurosamente
+                # Intento 2: OpenCV
                 import cv2
-                cap = cv2.VideoCapture(tmp_path)
+                cap = cv2.VideoCapture(decode_path)
                 if not cap.isOpened():
-                    raise RuntimeError("No se pudo abrir el video con OpenCV.")
+                    raise RuntimeError(
+                        f"No se pudo abrir el video con OpenCV. "
+                        f"Archivo: {decode_path}, existe: {os.path.exists(decode_path)}"
+                    )
 
                 frames = []
                 while True:
                     ret, frame = cap.read()
                     if not ret:
                         break
-
-                    # cv2 lee en BGR [H, W, C]. Convertir a RGB
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                    # Convertir a float32 [0-1] inmediatamente
-                    rgb = rgb.astype(np.float32) / 255.0
+                    # BGR → RGB + normalizar
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
                     frames.append(rgb)
 
                 cap.release()
@@ -697,18 +839,35 @@ class GoogleAICore:
                 if not frames:
                     raise RuntimeError("El video no contiene frames descifrables.")
 
-                # Apilar y crear tensor [T, H, W, C]
                 stacked = np.stack(frames, axis=0)
                 tensor = torch.from_numpy(stacked)
-                logger.info(f"[Video (OpenCV)] {tensor.shape[0]} frames, {tensor.shape[2]}x{tensor.shape[1]}")
+
+                # --- DIAGNÓSTICO AUTOMÁTICO ---
+                fmin = tensor.min().item()
+                fmax = tensor.max().item()
+                fmean = tensor.mean().item()
+                logger.info(
+                    f"[Video (OpenCV)] {tensor.shape[0]} frames, "
+                    f"{tensor.shape[2]}x{tensor.shape[1]} | "
+                    f"min={fmin:.4f} max={fmax:.4f} mean={fmean:.4f}"
+                )
+
+                if fmax < 0.01:
+                    logger.error(
+                        "⚠️ [Video] FRAMES NEGROS DETECTADOS (max < 0.01). "
+                        "Ni torchvision ni OpenCV pudieron decodificar correctamente."
+                    )
+
                 return tensor
 
         finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+            # Limpiar AMBOS archivos temporales
+            for path in [tmp_path, h264_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
