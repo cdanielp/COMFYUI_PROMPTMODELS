@@ -7,6 +7,13 @@
 
 > ⚠️ **Audio (Lyria 3)** removido — `lyria-3` no tiene endpoint de API pública (Feb 2026). Disponible solo en la app de Gemini. Se reintegrará cuando Google abra la API.
 
+> ### 🧪 VERSIÓN EN PRUEBAS
+> Esta versión (V2.4.3) incluye cambios significativos respecto a V2.4.2. Si encuentras nodos rojos, desconexiones o errores inesperados:
+> 1. **Nodos de audio Lyria** (`MusicDirector`, `FoleyGenerator`) — fueron eliminados. Bórralos del workflow.
+> 2. **Nodos de video** — ahora tienen una salida `AUDIO` adicional. Reconecta los nodos downstream.
+> 3. **Video negro** — requiere ffmpeg instalado. Ver [Solución de Problemas](#-solución-de-problemas).
+> 4. Reporta cualquier issue en [GitHub Issues](https://github.com/cdanielp/COMFYUI_PROMPTMODELS/issues).
+
 ---
 
 ## 📑 Tabla de Contenidos
