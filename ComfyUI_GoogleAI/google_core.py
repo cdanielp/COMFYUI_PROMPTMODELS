@@ -349,7 +349,7 @@ class GoogleAICore:
     # ========================================================================
     # IMAGEN — Nano Banana Pro/Flash → generateContent + responseModalities:IMAGE
     # ========================================================================
-   @staticmethod
+    @staticmethod
     def generate_image_gemini(
         api_key: str,
         prompt: str,
