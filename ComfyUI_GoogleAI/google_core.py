@@ -349,7 +349,7 @@ class GoogleAICore:
     # ========================================================================
     # IMAGEN — Nano Banana Pro/Flash → generateContent + responseModalities:IMAGE
     # ========================================================================
-    @staticmethod
+   @staticmethod
     def generate_image_gemini(
         api_key: str,
         prompt: str,
@@ -360,7 +360,7 @@ class GoogleAICore:
         resolution_hint: str = "2K",
         seed: int = 0,
         safety_settings: Optional[List[Dict]] = None,
-        timeout: int = 180,
+        timeout: int = 300, # <-- Aquí cambiaste 180 por 300
     ) -> bytes:
         """
         Genera imagen con Nano Banana Pro/Flash (modelos Gemini multimodales).
