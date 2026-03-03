@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
