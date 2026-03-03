@@ -1,12 +1,13 @@
-# ComfyUI_GoogleAI V2.4.3 - Dependencias Python
+# ComfyUI_GoogleAI V2.5.0 - Dependencias Python
 # pip install -r requirements.txt
 #
 # NOTA: ffmpeg del sistema es requerido para video/audio.
-# Se instala automáticamente via install.py en Docker/ComfyDeploy.
+# Se instala automaticamente via install.py en Docker/ComfyDeploy.
 # Manual: apt install ffmpeg (Linux) | brew install ffmpeg (macOS)
 
 requests>=2.28.0
 aiohttp>=3.8.0
-opencv-python>=4.8.0
+Pillow>=9.0.0
+opencv-python-headless>=4.8.0
 safetensors>=0.4.0
 scipy>=1.10.0

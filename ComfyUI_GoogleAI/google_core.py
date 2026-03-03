@@ -1,23 +1,21 @@
 """
-google_core.py - Motor Central de la API de Google AI (V2.4.3)
+google_core.py - Motor Central de la API de Google AI (V2.5.0)
 ==============================================================
 Maneja TODAS las comunicaciones HTTP con la API REST de Google.
 Regla de Oro: CERO SDKs externos. Solo requests/aiohttp puras.
 
-Cambios V2.4.3:
-- FIX CRÍTICO: video_bytes_to_tensor() ahora transcodifica a H.264
-  antes de decodificar frames. Resuelve video negro con códecs
-  HEVC/VP9 de Veo 3.1 que torchvision/OpenCV no decodifican.
-- FIX AUDIO: video_bytes_to_audio() reescrito con ffmpeg directo.
-  Elimina dependencia de torchaudio/moviepy. Extrae audio via
-  ffmpeg → WAV PCM → tensor. Funciona en cualquier entorno con ffmpeg.
-- Diagnóstico automático: detecta frames negros y reporta códec.
-- Limpieza robusta de archivos temporales (original + transcodificado).
+Cambios V2.5.0:
+- Nano Banana 2 (gemini-3.1-flash-image-preview) agregado
+- ThinkingConfig: thinkingLevel (Gemini 3+) vs thinkingBudget (Gemini 2.5)
+- responseModalities: ["TEXT", "IMAGE"] para mayor robustez
+- MIME detection: JPEG + WEBP + PNG
+- call_with_backoff: HTTP 500 ahora retryable
+- 14 aspect ratios oficiales + 5 imageSize valores
+- Validación de resolución por modelo
 
-Cambios V2.4.2:
-- generate_image_gemini() → nuevo método para Nano Banana Pro/Flash
-  Usa generateContent con responseModalities:IMAGE (≠ Imagen 4)
-  Soporta hasta 14 imágenes de referencia como inlineData
+Cambios V2.4.3:
+- FIX CRÍTICO: video_bytes_to_tensor() transcodifica a H.264
+- FIX AUDIO: video_bytes_to_audio() reescrito con ffmpeg directo
 
 Autor: Prompt Models Studio | cdanielp
 """
@@ -35,7 +33,7 @@ import threading
 import logging
 import subprocess
 import shutil
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import torch
 import numpy as np
@@ -53,14 +51,131 @@ IMAGEN_GENERATE_ENDPOINT = "{base}/models/{model}:generateImages?key={key}"
 VEO_GENERATE_ENDPOINT    = "{base}/models/{model}:predictLongRunning?key={key}"
 VEO_POLL_ENDPOINT        = "{base}/{operation_name}?key={key}"
 
-# Modelos por defecto — strings exactos de la API (Feb 2026)
+# Modelos por defecto — strings exactos de la API (Mar 2026)
 DEFAULT_TEXT_MODEL  = "gemini-3.1-pro-preview"
 DEFAULT_IMAGE_MODEL = "imagen-4.0-generate-001"
 DEFAULT_VIDEO_MODEL = "veo-3.1-generate-preview"
 
 # Familias de modelos para routing interno
-GEMINI_IMAGE_MODELS = ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
-IMAGEN_MODELS       = ("imagen-4.0", "imagen-3.0")
+GEMINI_IMAGE_MODELS = (
+    "gemini-3.1-flash-image-preview",  # Nano Banana 2 (Feb 26, 2026)
+    "gemini-3-pro-image-preview",      # Nano Banana Pro
+    "gemini-2.5-flash-image",          # Nano Banana (original)
+)
+IMAGEN_MODELS = ("imagen-4.0", "imagen-3.0")
+
+# ============================================================================
+# ASPECT RATIOS Y RESOLUCIONES — API Feb 2026
+# ============================================================================
+# 14 aspect ratios oficiales para Nano Banana (generateContent)
+NB_ASPECT_RATIOS = [
+    "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1",
+    "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9",
+]
+
+# imageSize values para Nano Banana
+NB_IMAGE_SIZES = ["512px", "0.5K", "1K", "2K", "4K"]
+
+# Aspect ratios para Imagen 4 (generateImages — subset limitado)
+IMAGEN_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"]
+
+# Resolución máxima por modelo Nano Banana
+NB_MAX_RESOLUTION = {
+    "gemini-3.1-flash-image-preview": "4K",   # NB2 — también soporta 0.5K
+    "gemini-3-pro-image-preview":     "4K",   # NB Pro
+    "gemini-2.5-flash-image":         "1K",   # NB original — solo hasta 1K
+}
+
+# Modelos que soportan 0.5K (exclusivo NB2)
+NB_SUPPORTS_HALF_K = {"gemini-3.1-flash-image-preview"}
+
+# Jerarquía de resoluciones para downgrade automático
+_RESOLUTION_ORDER = ["512px", "0.5K", "1K", "2K", "4K"]
+
+# ============================================================================
+# THINKING CONFIG — Gemini 3+ vs Gemini 2.5
+# ============================================================================
+# Gemini 3.1 Pro / Gemini 3 Flash: thinkingLevel (string)
+# Gemini 2.5 Pro / Flash: thinkingBudget (numérico)
+THINKING_LEVEL_MAP = {
+    "Low":    "low",
+    "Medium": "medium",
+    "High":   "high",
+}
+
+THINKING_BUDGET_MAP = {
+    "Low":    1024,
+    "Medium": 4096,
+    "High":   8192,
+}
+
+
+def _build_thinking_config(model: str, thinking_budget: str) -> Optional[Dict]:
+    """
+    Construye thinkingConfig correcto según familia del modelo.
+    Gemini 3+  → thinkingLevel (string: low/medium/high)
+    Gemini 2.5 → thinkingBudget (numérico: 1024/4096/8192)
+    """
+    if not thinking_budget or thinking_budget == "Off":
+        return None
+
+    # Gemini 3.x usa thinkingLevel
+    if model.startswith("gemini-3"):
+        level = THINKING_LEVEL_MAP.get(thinking_budget, "low")
+        return {"thinkingLevel": level}
+
+    # Gemini 2.5 usa thinkingBudget
+    if model.startswith("gemini-2.5"):
+        budget = THINKING_BUDGET_MAP.get(thinking_budget, 1024)
+        return {"thinkingBudget": budget}
+
+    # Otros modelos: no soportan thinking
+    logger.warning(f"[ThinkingConfig] Modelo '{model}' no soporta thinking. Ignorando.")
+    return None
+
+
+def _validate_image_size(model: str, image_size: str) -> str:
+    """
+    Valida y ajusta imageSize según capacidades del modelo.
+    Retorna imageSize válido (con posible downgrade).
+    """
+    max_res = NB_MAX_RESOLUTION.get(model, "2K")
+    max_idx = _RESOLUTION_ORDER.index(max_res) if max_res in _RESOLUTION_ORDER else 3
+
+    # 0.5K solo NB2
+    if image_size == "0.5K" and model not in NB_SUPPORTS_HALF_K:
+        logger.warning(
+            f"[ImageSize] 0.5K no soportado por '{model}' → usando 1K. "
+            f"Solo gemini-3.1-flash-image-preview soporta 0.5K."
+        )
+        return "1K"
+
+    req_idx = _RESOLUTION_ORDER.index(image_size) if image_size in _RESOLUTION_ORDER else 3
+
+    if req_idx > max_idx:
+        downgraded = _RESOLUTION_ORDER[max_idx]
+        logger.warning(
+            f"[ImageSize] {image_size} no soportado por '{model}' (max: {max_res}) "
+            f"→ downgrade a {downgraded}."
+        )
+        return downgraded
+
+    return image_size
+
+
+# ============================================================================
+# MIME DETECTION
+# ============================================================================
+def _detect_mime_from_b64(b64_data: str) -> str:
+    """Detecta MIME type real desde los primeros bytes del base64."""
+    if b64_data.startswith("/9j/"):
+        return "image/jpeg"
+    if b64_data.startswith("UklGR"):
+        return "image/webp"
+    if b64_data.startswith("iVBOR"):
+        return "image/png"
+    return "image/png"  # fallback seguro
+
 
 # Costo Veo 3.1 Standard (USD/segundo)
 VIDEO_COST_PER_SECOND = 0.40
@@ -81,9 +196,6 @@ SAFETY_THRESHOLDS = [
 ]
 
 # Presets resolución Veo 3.1: (resolution_api, aspect_ratio_api)
-# ⚠️ Convención INVERSA a SIZE_PRESETS de imagen que usa (aspect_ratio, resolution_hint)
-#    Video: (resolution_api, aspect_ratio_api)  — ej. ("1080p", "16:9")
-#    Imagen: (aspect_ratio, resolution_hint)    — ej. ("16:9", "2K")
 VEO_RESOLUTION_PRESETS = {
     "1920x1080 (16:9)":    ("1080p", "16:9"),
     "1080x1920 (9:16)":    ("1080p", "9:16"),
@@ -149,11 +261,10 @@ def _transcode_to_h264(input_path: str) -> Optional[str]:
             "  brew install ffmpeg (macOS)\n"
             "  choco install ffmpeg (Windows)"
         )
-        return None  # Señal para intentar decodificación directa
+        return None
 
     h264_path = input_path.replace(".mp4", "_h264.mp4")
 
-    # Primero, inspeccionar el códec original para logging
     try:
         probe = subprocess.run(
             [
@@ -179,11 +290,10 @@ def _transcode_to_h264(input_path: str) -> Optional[str]:
                 )
                 if codec == "h264" and pix_fmt in ("yuv420p", "yuvj420p"):
                     logger.info("[Transcode] Ya es H.264/yuv420p → skip transcodificación")
-                    return input_path  # No necesita transcodificación
+                    return input_path
     except Exception as e:
         logger.warning(f"[Transcode] ffprobe falló (no crítico): {e}")
 
-    # Transcodificar
     result = subprocess.run(
         [
             "ffmpeg", "-y",
@@ -192,8 +302,8 @@ def _transcode_to_h264(input_path: str) -> Optional[str]:
             "-preset", "fast",
             "-crf", "18",
             "-pix_fmt", "yuv420p",
-            "-an",                    # Sin audio (se extrae por separado)
-            "-movflags", "+faststart", # Metadata al inicio para lectura rápida
+            "-an",
+            "-movflags", "+faststart",
             h264_path,
         ],
         capture_output=True, text=True, timeout=120,
@@ -206,7 +316,6 @@ def _transcode_to_h264(input_path: str) -> Optional[str]:
             f"{stderr_snippet}"
         )
 
-    # Verificar que el archivo de salida existe y tiene tamaño razonable
     if not os.path.exists(h264_path):
         raise RuntimeError("ffmpeg terminó OK pero no creó archivo de salida.")
 
@@ -216,7 +325,7 @@ def _transcode_to_h264(input_path: str) -> Optional[str]:
         f"[Transcode] OK → {in_size/1024:.0f}KB → {out_size/1024:.0f}KB (H.264)"
     )
 
-    if out_size < 1024:  # Menos de 1KB = algo salió mal
+    if out_size < 1024:
         raise RuntimeError(
             f"Archivo transcodificado sospechosamente pequeño ({out_size} bytes). "
             f"El video original podría estar corrupto."
@@ -318,12 +427,11 @@ class GoogleAICore:
         contents = [{"role": "user", "parts": parts}]
         gen_config = generation_config or {}
 
-        if thinking_budget:
-            budget_map = {"Low": 1024, "High": 8192}
-            if thinking_budget in budget_map:
-                gen_config["thinkingConfig"] = {
-                    "thinkingBudget": budget_map[thinking_budget]
-                }
+        # V2.5.0: ThinkingConfig inteligente por familia de modelo
+        if thinking_budget and thinking_budget != "Off":
+            thinking_cfg = _build_thinking_config(model, thinking_budget)
+            if thinking_cfg:
+                gen_config["thinkingConfig"] = thinking_cfg
 
         result = GoogleAICore.call_gemini(
             api_key=api_key,
@@ -347,7 +455,7 @@ class GoogleAICore:
             return f"[Error al parsear respuesta: {str(e)}]"
 
     # ========================================================================
-    # IMAGEN — Nano Banana Pro/Flash → generateContent + responseModalities:IMAGE
+    # IMAGEN — Nano Banana → generateContent + responseModalities:TEXT+IMAGE
     # ========================================================================
     @staticmethod
     def generate_image_gemini(
@@ -357,40 +465,49 @@ class GoogleAICore:
         system_instruction: Optional[str] = None,
         reference_images_b64: Optional[List[str]] = None,
         aspect_ratio: str = "1:1",
-        resolution_hint: str = "2K",
+        image_size: str = "2K",
         seed: int = 0,
         safety_settings: Optional[List[Dict]] = None,
-        timeout: int = 300, # <-- Aquí cambiaste 180 por 300
-    ) -> bytes:
+        timeout: int = 300,
+    ) -> Tuple[bytes, str]:
         """
-        Genera imagen con Nano Banana Pro/Flash (modelos Gemini multimodales).
-        Endpoint: generateContent con responseModalities: ["IMAGE"]
+        Genera imagen con Nano Banana (NB2/Pro/original).
+        Endpoint: generateContent con responseModalities: ["TEXT", "IMAGE"]
         Soporta hasta 14 imágenes de referencia como inlineData.
         Seed para reproducibilidad (0 = sin fijar).
-        Retorna bytes PNG de la imagen generada.
+
+        V2.5.0:
+        - responseModalities incluye TEXT para mayor robustez
+        - image_size separado de aspect_ratio
+        - Validación automática de resolución por modelo
+        - MIME detection mejorada (JPEG/WEBP/PNG)
+
+        Retorna tupla: (bytes_imagen_PNG, texto_descripcion)
         """
         url = GEMINI_TEXT_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
 
+        # Validar imageSize para este modelo
+        validated_size = _validate_image_size(model, image_size)
+
         # Construir parts: primero las referencias, luego el prompt
         parts = []
         if reference_images_b64:
-            for img_b64 in reference_images_b64[:14]:  # Límite de 14 según documentación
-                # Detectar formato real: compress_image_for_api puede retornar WEBP
-                mime = "image/webp" if img_b64.startswith("UklGR") else "image/png"
+            for img_b64 in reference_images_b64[:14]:
+                mime = _detect_mime_from_b64(img_b64)
                 parts.append({
                     "inlineData": {"mimeType": mime, "data": img_b64}
                 })
 
         parts.append({"text": prompt})
 
-        # camelCase directo — REST API exige esta convención exacta
+        # V2.5.0: TEXT + IMAGE para mayor robustez (compatible con Vertex AI)
         gen_config: Dict[str, Any] = {
-            "responseModalities": ["IMAGE"],
+            "responseModalities": ["TEXT", "IMAGE"],
             "imageConfig": {
                 "aspectRatio": aspect_ratio,
-                "imageSize": resolution_hint,
+                "imageSize": validated_size,
             },
         }
         if seed:
@@ -435,15 +552,23 @@ class GoogleAICore:
         try:
             data = GoogleAICore.call_with_backoff(_do_request)
 
-            # Extraer imagen de la respuesta
+            # Extraer imagen y texto de la respuesta
+            image_bytes = None
+            text_description = ""
+
             for candidate in data.get("candidates", []):
                 for part in candidate.get("content", {}).get("parts", []):
                     if "inlineData" in part:
                         mime = part["inlineData"].get("mimeType", "")
-                        if "image" in mime:
-                            return base64.b64decode(part["inlineData"]["data"])
+                        if "image" in mime and image_bytes is None:
+                            image_bytes = base64.b64decode(part["inlineData"]["data"])
+                    elif "text" in part:
+                        text_description += part["text"]
 
-            raise RuntimeError("La API no retornó imagen en la respuesta.")
+            if image_bytes is None:
+                raise RuntimeError("La API no retornó imagen en la respuesta.")
+
+            return (image_bytes, text_description)
 
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response else "N/A"
@@ -469,7 +594,7 @@ class GoogleAICore:
         num_images: int = 1,
         seed: int = 0,
     ) -> List[bytes]:
-        """Genera imágenes via Imagen 4 (generateImages). Seed para reproducibilidad. Retorna lista de bytes PNG."""
+        """Genera imágenes via Imagen 4 (generateImages). Retorna lista de bytes PNG."""
         url = IMAGEN_GENERATE_ENDPOINT.format(
             base=GEMINI_BASE_URL, model=model, key=api_key
         )
@@ -512,7 +637,6 @@ class GoogleAICore:
 
     # ========================================================================
     # VIDEO — Veo 3.1 → generateVideos (ASYNC con aiohttp + polling)
-    # Llamar desde nodos síncronos con _run_async() en google_video_node.py
     # ========================================================================
     @staticmethod
     async def generate_video(
@@ -534,7 +658,6 @@ class GoogleAICore:
             resolution_preset, ("1080p", "16:9")
         )
 
-        # Timeout dinámico según resolución y duración
         RESOLUTION_MULTIPLIER = {"1080p": 1.0, "4k": 2.5}
         max_wait = 300 + int(duration_seconds * 60 * RESOLUTION_MULTIPLIER.get(resolution, 1.0))
         logger.info(f"[Veo] Timeout máximo calculado: {max_wait}s (resolución={resolution}, duración={duration_seconds}s)")
@@ -575,7 +698,6 @@ class GoogleAICore:
         headers = {"Content-Type": "application/json"}
 
         async with aiohttp.ClientSession() as session:
-            # 1. Iniciar operación
             try:
                 async with session.post(
                     start_url,
@@ -600,7 +722,6 @@ class GoogleAICore:
 
             logger.info(f"[Veo] Operación iniciada: {operation_name}")
 
-            # 2. Polling asíncrono
             poll_url = VEO_POLL_ENDPOINT.format(
                 base=GEMINI_BASE_URL,
                 operation_name=operation_name,
@@ -627,7 +748,6 @@ class GoogleAICore:
                     continue
 
                 if poll_data.get("done", False):
-                    # Verificar si la LRO terminó en estado FAILED
                     lro_error = poll_data.get("error", {})
                     if lro_error:
                         raise RuntimeError(
@@ -637,10 +757,9 @@ class GoogleAICore:
                         )
                     resp_data = poll_data.get("response", {})
 
-                    # --- DEBUG POR SI ACASO ---
                     logger.warning(f"[DEBUG VEO] LLAVES EN LA RESPUESTA DE GOOGLE: {list(resp_data.keys())}")
 
-                    # 1. FORMATO PREDICT (Vertex/AI Studio predictLongRunning)
+                    # 1. FORMATO PREDICT
                     predictions = resp_data.get("predictions", [])
                     if predictions:
                         first_pred = predictions[0]
@@ -653,7 +772,7 @@ class GoogleAICore:
                                 vid_resp.raise_for_status()
                                 return await vid_resp.read()
 
-                    # 2. FORMATO generateVideoResponse (SDK Antiguo)
+                    # 2. FORMATO generateVideoResponse
                     gen_response = resp_data.get("generateVideoResponse", {})
                     samples = gen_response.get("generatedSamples", [])
                     if samples:
@@ -663,7 +782,7 @@ class GoogleAICore:
                                 vid_resp.raise_for_status()
                                 return await vid_resp.read()
 
-                    # 3. FORMATO alternativo generatedVideos
+                    # 3. FORMATO generatedVideos
                     generated = resp_data.get("generatedVideos", [])
                     if generated:
                         video_uri = generated[0].get("video", {}).get("uri", "")
@@ -682,7 +801,7 @@ class GoogleAICore:
             raise RuntimeError(f"Timeout: La generación de video excedió {max_wait}s.")
 
     # ========================================================================
-    # AUDIO — Extracción via ffmpeg directo (sin torchaudio, sin moviepy)
+    # AUDIO — Extracción via ffmpeg directo
     # ========================================================================
     @staticmethod
     def video_bytes_to_audio(video_bytes: bytes) -> Dict:
@@ -704,7 +823,6 @@ class GoogleAICore:
 
             tmp_wav = tmp_video.replace(".mp4", "_audio.wav")
 
-            # Extraer audio como WAV PCM 16-bit stereo 44100Hz
             result = subprocess.run(
                 [
                     "ffmpeg", "-y", "-i", tmp_video,
@@ -724,19 +842,16 @@ class GoogleAICore:
                 logger.info("[VideoAudio] Audio vacío → dummy.")
                 return _make_dummy_audio()
 
-            # Leer WAV — intentar scipy, fallback a lectura manual
             sample_rate = 44100
             try:
                 from scipy.io import wavfile
                 sample_rate, data = wavfile.read(tmp_wav)
             except ImportError:
-                # Lectura manual de WAV PCM 16-bit (skip 44-byte header)
                 with open(tmp_wav, "rb") as wf:
                     wf.read(44)
                     raw = wf.read()
                 data = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
 
-            # int16 → float32 normalizado
             audio = data.astype(np.float32) / 32768.0
 
             if audio.ndim == 1:
@@ -746,7 +861,6 @@ class GoogleAICore:
                 logger.info("[VideoAudio] Pista silenciosa → dummy.")
                 return _make_dummy_audio()
 
-            # [samples, channels] → [1, channels, samples] para ComfyUI
             waveform = torch.from_numpy(audio.T).unsqueeze(0)
 
             logger.info(f"[VideoAudio] Audio OK: {waveform.shape} @ {sample_rate}Hz")
@@ -793,57 +907,42 @@ class GoogleAICore:
         return tensor
 
     # ========================================================================
-    # VIDEO → TENSOR (V2.4.3 — FIX CRÍTICO: transcodificación H.264)
+    # VIDEO → TENSOR (V2.4.3 — transcodificación H.264)
     # ========================================================================
     @staticmethod
     def video_bytes_to_tensor(video_bytes: bytes) -> torch.Tensor:
         """
         Convierte bytes MP4 a tensor [B, H, W, C] float32 0.0-1.0.
-
-        V2.4.3: Transcodifica automáticamente a H.264/yuv420p antes de
-        decodificar frames. Esto resuelve el bug de video negro causado
-        por códecs HEVC/VP9/AV1 que torchvision y OpenCV no soportan
-        en sus builds estándar.
-
-        Pipeline: bytes → tmp.mp4 → ffmpeg H.264 → decodificar → tensor
+        Transcodifica automáticamente a H.264/yuv420p antes de decodificar.
         """
         tmp_path = None
         h264_path = None
 
         try:
-            # 1. Escribir bytes a archivo temporal
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp.write(video_bytes)
                 tmp_path = tmp.name
 
             logger.info(f"[Video] Archivo temporal: {tmp_path} ({len(video_bytes)/1024:.0f}KB)")
 
-            # 2. TRANSCODIFICAR a H.264 (si ffmpeg está disponible)
             transcode_result = _transcode_to_h264(tmp_path)
 
             if transcode_result is not None:
                 h264_path = transcode_result
                 decode_path = h264_path
             else:
-                # ffmpeg no disponible → intentar decodificar el original directo
                 decode_path = tmp_path
 
-            # 3. Decodificar frames
             # Intento 1: TorchVision
             try:
                 import torchvision.io
                 frames_t, audio_t, info = torchvision.io.read_video(
                     decode_path, pts_unit="sec", output_format="TCHW"
                 )
-
-                # [T, C, H, W] → [T, H, W, C] para ComfyUI
                 frames_t = frames_t.permute(0, 2, 3, 1)
-
-                # Normalizar a float32 [0.0, 1.0]
                 if frames_t.dtype == torch.uint8:
                     frames_t = frames_t.float() / 255.0
 
-                # --- DIAGNÓSTICO AUTOMÁTICO ---
                 fmin = frames_t.min().item()
                 fmax = frames_t.max().item()
                 fmean = frames_t.mean().item()
@@ -856,14 +955,11 @@ class GoogleAICore:
                 if fmax < 0.01:
                     if transcode_result is None:
                         logger.error(
-                            "⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible. "
-                            "El códec del video (probable HEVC/VP9) no es compatible "
-                            "con torchvision. SOLUCIÓN: instalar ffmpeg en el entorno."
+                            "⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible."
                         )
                     else:
                         logger.error(
-                            "⚠️ [Video] FRAMES NEGROS después de transcodificar. "
-                            "El MP4 original podría estar corrupto."
+                            "⚠️ [Video] FRAMES NEGROS después de transcodificar."
                         )
 
                 return frames_t
@@ -871,7 +967,6 @@ class GoogleAICore:
             except Exception as tv_e:
                 logger.warning(f"[Video] Falló torchvision: {tv_e} → fallback OpenCV")
 
-                # Intento 2: OpenCV
                 import cv2
                 cap = cv2.VideoCapture(decode_path)
                 if not cap.isOpened():
@@ -885,10 +980,8 @@ class GoogleAICore:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    # BGR → RGB + normalizar
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
                     frames.append(rgb)
-
                 cap.release()
 
                 if not frames:
@@ -897,7 +990,6 @@ class GoogleAICore:
                 stacked = np.stack(frames, axis=0)
                 tensor = torch.from_numpy(stacked)
 
-                # --- DIAGNÓSTICO AUTOMÁTICO ---
                 fmin = tensor.min().item()
                 fmax = tensor.max().item()
                 fmean = tensor.mean().item()
@@ -909,21 +1001,13 @@ class GoogleAICore:
 
                 if fmax < 0.01:
                     if transcode_result is None:
-                        logger.error(
-                            "⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible. "
-                            "El códec del video no es compatible con OpenCV. "
-                            "SOLUCIÓN: instalar ffmpeg en el entorno."
-                        )
+                        logger.error("⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible.")
                     else:
-                        logger.error(
-                            "⚠️ [Video] FRAMES NEGROS después de transcodificar. "
-                            "El MP4 original podría estar corrupto."
-                        )
+                        logger.error("⚠️ [Video] FRAMES NEGROS después de transcodificar.")
 
                 return tensor
 
         finally:
-            # Limpiar AMBOS archivos temporales
             for path in [tmp_path, h264_path]:
                 if path and os.path.exists(path):
                     try:
@@ -1058,8 +1142,7 @@ class GoogleAICore:
     def call_with_backoff(fn, *args, max_retries: int = 5, **kwargs) -> Any:
         """
         Envuelve cualquier callable con exponential backoff con jitter.
-        Solo reintenta en errores 429 y 503. El resto se propaga inmediatamente.
-        Fórmula: delay = min(1.0 * 2^intento + random(0,1), 60)
+        V2.5.0: Ahora reintenta en 429, 500 y 503 (500 = transiente en Google AI).
         """
         import random as _random
         for attempt in range(max_retries):
@@ -1071,14 +1154,14 @@ class GoogleAICore:
 
                 if isinstance(e, requests.exceptions.HTTPError):
                     code = e.response.status_code if e.response else 0
-                    if code in (429, 503):
+                    if code in (429, 500, 503):
                         retryable = True
                         status_label = str(code)
                 elif isinstance(e, RuntimeError):
                     msg = str(e)
-                    if "429" in msg or "503" in msg:
+                    if "429" in msg or "500" in msg or "503" in msg:
                         retryable = True
-                        status_label = "429" if "429" in msg else "503"
+                        status_label = "429" if "429" in msg else ("500" if "500" in msg else "503")
 
                 if retryable:
                     delay = min(1.0 * (2 ** attempt) + _random.random(), 60.0)
@@ -1091,5 +1174,5 @@ class GoogleAICore:
                 else:
                     raise
         raise RuntimeError(
-            f"[call_with_backoff] Se agotaron {max_retries} intentos por rate limiting (429/503)."
+            f"[call_with_backoff] Se agotaron {max_retries} intentos por errores transitorios (429/500/503)."
         )

@@ -1,8 +1,12 @@
 """
-google_text_node.py - Nodos de Texto para ComfyUI (V2.0)
-=========================================================
-Modelos actualizados a strings estables (Feb 2026).
-Soporta: thinking_budget, youtube_url, imagen multimodal.
+google_text_node.py - Nodos de Texto para ComfyUI (V2.5.0)
+===========================================================
+V2.5.0:
+- Model strings corregidos (gemini-3-flash-preview, no gemini-3-flash)
+- 5 pines de imagen (image_1..image_5) en TextNode
+- ThinkingConfig: Off/Low/Medium/High (thinkingLevel para 3+, thinkingBudget para 2.5)
+- gemini-3-pro-preview eliminado (deprecated 9 Mar 2026)
+- TextVisionNode: 1 obligatoria + 4 opcionales
 
 Autor: Prompt Models Studio | cdanielp
 """
@@ -12,20 +16,19 @@ from .google_core import GoogleAICore
 
 logger = logging.getLogger("ComfyUI_GoogleAI")
 
-# Strings exactos válidos en la API — Feb 2026
+# Strings exactos validos en la API - Mar 2026
 TEXT_MODELS = [
-    "gemini-3.1-pro-preview",   # Más reciente
-    "gemini-3-pro",              # Gemini 3 Pro
-    "gemini-3-flash",            # Gemini 3 Flash
-    "gemini-2.5-pro",            # Antes: gemini-2.5-pro-preview-06-05
-    "gemini-2.5-flash",          # Antes: gemini-2.5-flash-preview-05-20
+    "gemini-3.1-pro-preview",    # Mas reciente - thinkingLevel
+    "gemini-3-flash-preview",    # Gemini 3 Flash - thinkingLevel
+    "gemini-2.5-pro",            # Gemini 2.5 Pro - thinkingBudget
+    "gemini-2.5-flash",          # Gemini 2.5 Flash - thinkingBudget
 ]
 
 
 class GoogleAI_TextNode:
     """
-    Nodo de generación de texto con Gemini.
-    Soporta texto puro, imagen multimodal, YouTube y thinking budget.
+    Nodo de generacion de texto con Gemini.
+    Soporta texto puro, hasta 5 imagenes multimodal, YouTube y thinking.
     """
 
     @classmethod
@@ -37,15 +40,22 @@ class GoogleAI_TextNode:
                     "default": "Describe esta imagen en detalle.",
                 }),
                 "model": (TEXT_MODELS, {"default": "gemini-3.1-pro-preview"}),
-                "thinking_budget": (["Off", "Low", "High"], {
+                "thinking_budget": (["Off", "Low", "Medium", "High"], {
                     "default": "Off",
-                    "tooltip": "Low=1024 tokens, High=8192 tokens de razonamiento."
+                    "tooltip": (
+                        "Gemini 3+: thinkingLevel (low/medium/high). "
+                        "Gemini 2.5: thinkingBudget (1024/4096/8192 tokens)."
+                    ),
                 }),
             },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
                 "system_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "image": ("IMAGE",),
+                "image_1": ("IMAGE", {"tooltip": "Imagen 1 para analisis multimodal."}),
+                "image_2": ("IMAGE", {"tooltip": "Imagen 2 (opcional)."}),
+                "image_3": ("IMAGE", {"tooltip": "Imagen 3 (opcional)."}),
+                "image_4": ("IMAGE", {"tooltip": "Imagen 4 (opcional)."}),
+                "image_5": ("IMAGE", {"tooltip": "Imagen 5 (opcional)."}),
                 "youtube_url": ("STRING", {"default": ""}),
                 "max_tokens": ("INT", {"default": 4096, "min": 64, "max": 65536, "step": 64}),
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05}),
@@ -58,15 +68,20 @@ class GoogleAI_TextNode:
     CATEGORY = "Google AI/Text"
 
     def generate_text(self, prompt, model, thinking_budget, api_key="",
-                      system_prompt="", image=None, youtube_url="",
+                      system_prompt="",
+                      image_1=None, image_2=None, image_3=None,
+                      image_4=None, image_5=None,
+                      youtube_url="",
                       max_tokens=4096, temperature=0.7):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
             extra_parts = []
 
-            if image is not None:
-                img_b64 = GoogleAICore.tensor_to_base64(image, index=0)
-                extra_parts.append({"inlineData": {"mimeType": "image/png", "data": img_b64}})
+            # V2.5.0: Multiples imagenes
+            for img in [image_1, image_2, image_3, image_4, image_5]:
+                if img is not None:
+                    img_b64 = GoogleAICore.tensor_to_base64(img, index=0)
+                    extra_parts.append({"inlineData": {"mimeType": "image/png", "data": img_b64}})
 
             if youtube_url and youtube_url.strip():
                 extra_parts.append({"fileData": {"mimeType": "video/*", "fileUri": youtube_url.strip()}})
@@ -89,19 +104,26 @@ class GoogleAI_TextNode:
 
 
 class GoogleAI_TextVisionNode:
-    """Análisis de imágenes con Gemini Vision. Requiere imagen obligatoria."""
+    """
+    Analisis de imagenes con Gemini Vision.
+    1 imagen obligatoria + 4 opcionales para comparaciones/secuencias.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
+                "image_1": ("IMAGE", {"tooltip": "Imagen principal (obligatoria)."}),
                 "prompt": ("STRING", {"multiline": True, "default": "Describe esta imagen en detalle."}),
                 "model": (TEXT_MODELS, {"default": "gemini-3.1-pro-preview"}),
             },
             "optional": {
                 "api_key": ("STRING", {"default": ""}),
                 "system_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "image_2": ("IMAGE", {"tooltip": "Imagen adicional 2 (opcional)."}),
+                "image_3": ("IMAGE", {"tooltip": "Imagen adicional 3 (opcional)."}),
+                "image_4": ("IMAGE", {"tooltip": "Imagen adicional 4 (opcional)."}),
+                "image_5": ("IMAGE", {"tooltip": "Imagen adicional 5 (opcional)."}),
             },
         }
 
@@ -110,11 +132,16 @@ class GoogleAI_TextVisionNode:
     FUNCTION = "analyze_image"
     CATEGORY = "Google AI/Text"
 
-    def analyze_image(self, image, prompt, model, api_key="", system_prompt=""):
+    def analyze_image(self, image_1, prompt, model, api_key="", system_prompt="",
+                      image_2=None, image_3=None, image_4=None, image_5=None):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            img_b64 = GoogleAICore.tensor_to_base64(image, index=0)
-            extra_parts = [{"inlineData": {"mimeType": "image/png", "data": img_b64}}]
+            extra_parts = []
+
+            for img in [image_1, image_2, image_3, image_4, image_5]:
+                if img is not None:
+                    img_b64 = GoogleAICore.tensor_to_base64(img, index=0)
+                    extra_parts.append({"inlineData": {"mimeType": "image/png", "data": img_b64}})
 
             result = GoogleAICore.call_gemini_text(
                 api_key=key, prompt=prompt, model=model,

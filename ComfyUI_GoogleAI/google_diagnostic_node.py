@@ -1,9 +1,10 @@
 """
-google_diagnostic_node.py - Nodos de Diagnóstico para ComfyUI (V2.0)
+google_diagnostic_node.py - Nodos de Diagnóstico para ComfyUI (V2.5.0)
 =====================================================================
 Gemini 3.1 Pro para análisis de modelos, LoRAs, workflows, compatibilidad.
 
-Modelos actualizados a strings estables (Feb 2026).
+V2.5.0: gemini-3-flash-preview agregado como opcion rapida.
+Modelos actualizados a strings estables (Mar 2026).
 
 Autor: Prompt Models Studio | cdanielp
 """
@@ -27,6 +28,7 @@ logger = logging.getLogger("ComfyUI_GoogleAI")
 # Strings exactos válidos en la API — Feb 2026
 DIAG_MODELS = [
     "gemini-3.1-pro-preview",  # Mejor para análisis complejos
+    "gemini-3-flash-preview",  # Rápido y económico (V2.5.0)
     "gemini-2.5-flash",        # Antes: gemini-2.5-flash-preview-05-20
     "gemini-2.5-pro",          # Antes: gemini-2.5-pro-preview-06-05
 ]
