@@ -8,7 +8,7 @@
 #   2. GET  /v1/videos/{request_id} cada N segundos (polling)
 #   3. Cuando status == "done" -> descarga video.url -> extrae frames -> tensor
 #
-# Soporta: Text-to-Video, Image-to-Video (primer frame).
+# Soporta: Text-to-Video, Image-to-Video, Video Editing, Video Extension.
 # ==============================================================================
 
 import os
@@ -163,4 +163,164 @@ class Grok_Video_Forge:
 
         except Exception as e:
             log.error(f"[Grok_Video_Forge] Error procesando video: {e}")
+            return (GrokCore.create_error_tensor(),)
+
+
+# ======================================================================
+# NODO: Video Editor - POST /v1/videos/edits
+# ======================================================================
+class Grok_Video_Editor:
+    """
+    Edita un video existente con lenguaje natural.
+    POST /v1/videos/edits con video_url + prompt.
+    Preserva contenido no mencionado; modifica solo lo pedido.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_url": ("STRING", {
+                    "default": "",
+                    "tooltip": "URL del video a editar (temporal de xAI u otra URL publica).",
+                }),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "Change the sky to a dramatic sunset.",
+                }),
+                "model": (VIDEO_MODELS, {"default": "grok-imagine-video"}),
+                "api_key": ("STRING", {"multiline": False, "default": ""}),
+            },
+            "optional": {
+                "timeout": ("INT", {"default": 300, "min": 60, "max": 600, "step": 30}),
+                "poll_interval": ("INT", {"default": 5, "min": 2, "max": 30, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("video_frames",)
+    FUNCTION = "edit_video"
+    CATEGORY = "xAI/Grok"
+
+    def edit_video(self, video_url, prompt, model, api_key,
+                   timeout=300, poll_interval=5):
+        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+        if not key:
+            return (GrokCore.create_error_tensor(),)
+
+        try:
+            core = GrokCore(key)
+            payload = {
+                "video_url": video_url,
+                "prompt": prompt,
+                "model": model,
+            }
+
+            log.info("[Grok_Video_Editor] Enviando edicion de video...")
+            submit_res = core.submit_video("/videos/edits", payload)
+
+            if submit_res.get("error"):
+                log.error(f"[Grok_Video_Editor] Error: {submit_res.get('message')}")
+                return (GrokCore.create_error_tensor(),)
+
+            request_id = submit_res.get("request_id") or submit_res.get("id")
+            if not request_id:
+                return (GrokCore.create_error_tensor(),)
+
+            poll_res = core.poll_video(request_id, timeout=timeout, interval=poll_interval)
+            if poll_res.get("error"):
+                return (GrokCore.create_error_tensor(),)
+
+            video_data = poll_res.get("video", {})
+            url = video_data.get("url", "")
+            if not url:
+                return (GrokCore.create_error_tensor(),)
+
+            return Grok_Video_Forge._download_and_decode_video(None, url)
+
+        except Exception as e:
+            log.error(f"[Grok_Video_Editor] Fallo: {str(e)}")
+            return (GrokCore.create_error_tensor(),)
+
+
+# ======================================================================
+# NODO: Video Extension - POST /v1/videos/extensions
+# ======================================================================
+class Grok_Video_Extension:
+    """
+    Extiende un video existente con contenido nuevo.
+    POST /v1/videos/extensions con video_url + prompt + duration.
+    Duration controla solo la extension (ej: 10s original + 5s ext = 15s total).
+    Maximo total: 15 segundos.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_url": ("STRING", {
+                    "default": "",
+                    "tooltip": "URL del video a extender.",
+                }),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "Continue the scene with an explosion in the background.",
+                }),
+                "model": (VIDEO_MODELS, {"default": "grok-imagine-video"}),
+                "duration": ("INT", {
+                    "default": 5, "min": 2, "max": 10, "step": 1,
+                    "tooltip": "Duracion de la extension en segundos (2-10). Se suma al video original.",
+                }),
+                "api_key": ("STRING", {"multiline": False, "default": ""}),
+            },
+            "optional": {
+                "timeout": ("INT", {"default": 300, "min": 60, "max": 600, "step": 30}),
+                "poll_interval": ("INT", {"default": 5, "min": 2, "max": 30, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("video_frames",)
+    FUNCTION = "extend_video"
+    CATEGORY = "xAI/Grok"
+
+    def extend_video(self, video_url, prompt, model, duration, api_key,
+                     timeout=300, poll_interval=5):
+        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+        if not key:
+            return (GrokCore.create_error_tensor(),)
+
+        try:
+            core = GrokCore(key)
+            payload = {
+                "video_url": video_url,
+                "prompt": prompt,
+                "model": model,
+                "duration": duration,
+            }
+
+            log.info(f"[Grok_Video_Extension] Extendiendo video +{duration}s...")
+            submit_res = core.submit_video("/videos/extensions", payload)
+
+            if submit_res.get("error"):
+                log.error(f"[Grok_Video_Extension] Error: {submit_res.get('message')}")
+                return (GrokCore.create_error_tensor(),)
+
+            request_id = submit_res.get("request_id") or submit_res.get("id")
+            if not request_id:
+                return (GrokCore.create_error_tensor(),)
+
+            poll_res = core.poll_video(request_id, timeout=timeout, interval=poll_interval)
+            if poll_res.get("error"):
+                return (GrokCore.create_error_tensor(),)
+
+            video_data = poll_res.get("video", {})
+            url = video_data.get("url", "")
+            if not url:
+                return (GrokCore.create_error_tensor(),)
+
+            return Grok_Video_Forge._download_and_decode_video(None, url)
+
+        except Exception as e:
+            log.error(f"[Grok_Video_Extension] Fallo: {str(e)}")
             return (GrokCore.create_error_tensor(),)
