@@ -1,44 +1,38 @@
 # ==============================================================================
-# grok_image_node.py — Generador y Editor de Imágenes de ComfyUI_Grok
+# grok_image_node.py - Generador y Editor de Imagenes de ComfyUI_Grok
 # ==============================================================================
-# Contiene el nodo V1 (Legado) para Text-to-Image puro.
-# Introduce el nodo V2 (Grok_Image_Master) con soporte para Image-to-Image.
-# Incluye sistema Anti-Crash (Imagen Roja) para errores de API.
+# V1 (Legado) para Text-to-Image puro.
+# V2 (Grok_Image_Master) con soporte para Image-to-Image (edicion).
+# Anti-Crash: imagen roja para errores de API.
+#
+# API xAI 2026: aspect_ratio + resolution (no size en pixeles).
 # ==============================================================================
 
 import os
-import requests
 import logging
 import torch
-from .grok_core import GrokCore, XAI_API_BASE
+from .grok_core import GrokCore, IMAGE_MODELS, IMAGE_ASPECT_RATIOS
 
 log = logging.getLogger("ComfyUI_GrokImage")
 
-GROK_IMAGE_MODELS = [
-    "grok-2-image-1212",
-    "grok-2-image"
-]
 
-ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"]
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. NODO LEGADO (V1) - Text-to-Image Básico
-# ══════════════════════════════════════════════════════════════════════════════
+# ======================================================================
+# 1. NODO LEGADO (V1) - Text-to-Image Basico
+# ======================================================================
 class GrokImageNode:
-    """
-    Nodo original V1. Generación pura desde texto.
-    Se mantiene intacto para no romper los JSON de workflows antiguos.
-    """
+    """Nodo V1: generacion pura desde texto. Retrocompatibilidad."""
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "A futuristic city in cyberpunk style"}),
-                "model": (GROK_IMAGE_MODELS, {"default": "grok-2-image-1212"}),
-                "aspect_ratio": (ASPECT_RATIOS, {"default": "1:1"}),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 4}),
+                "model": (IMAGE_MODELS, {"default": "grok-imagine-image"}),
+                "aspect_ratio": (IMAGE_ASPECT_RATIOS, {"default": "1:1"}),
+                "resolution": (["1k", "2k"], {"default": "1k"}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 10}),
                 "api_key": ("STRING", {"multiline": False, "default": ""}),
-            }
+            },
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -46,65 +40,77 @@ class GrokImageNode:
     FUNCTION = "generate"
     CATEGORY = "Grok/Legado"
 
-    def generate(self, prompt, model, aspect_ratio, batch_size, api_key):
+    def generate(self, prompt, model, aspect_ratio, resolution, batch_size, api_key):
         key = api_key.strip() or os.getenv("XAI_API_KEY", "")
         if not key:
-            log.error("[GrokImageNode] Falla: No hay API Key.")
+            log.error("[GrokImageNode] No hay API Key.")
             return (GrokCore.create_error_tensor(),)
 
         try:
             core = GrokCore(key)
-            # Adaptamos el aspect ratio al formato que espera xAI/OpenAI
-            size = "1024x1024"
-            if aspect_ratio == "16:9": size = "1280x720"
-            elif aspect_ratio == "9:16": size = "720x1280"
-            
             res = core.generate_image(
-                prompt=prompt, 
-                model=model, 
-                size=size,
-                n=batch_size
+                prompt=prompt, model=model,
+                aspect_ratio=aspect_ratio, resolution=resolution, n=batch_size,
             )
 
             if res.get("error"):
-                log.error(f"[GrokImageNode] Error de API: {res.get('message')}")
+                log.error(f"[GrokImageNode] API Error: {res.get('message')}")
                 return (core.create_error_tensor(),)
 
-            # Extraemos la imagen en base64 y la convertimos a Tensor [1, H, W, C]
-            b64_img = res["data"][0]["b64_json"]
-            out_tensor = core.base64_to_tensor(b64_img)
-            
-            # Si se pidieron múltiples imágenes, habría que concatenarlas (simplificado aquí)
-            return (out_tensor,)
+            data_list = res.get("data", [])
+            if not data_list:
+                log.error("[GrokImageNode] Respuesta vacia de la API.")
+                return (core.create_error_tensor(),)
+
+            tensors = []
+            for item in data_list:
+                b64 = item.get("b64_json")
+                if b64:
+                    tensors.append(core.base64_to_tensor(b64))
+                else:
+                    url = item.get("url")
+                    if url:
+                        tensors.append(core.url_to_tensor(url))
+
+            if not tensors:
+                return (core.create_error_tensor(),)
+
+            return (torch.cat(tensors, dim=0),)
 
         except Exception as e:
-            log.error(f"[GrokImageNode] Crash evitado. Retornando imagen roja. Error: {str(e)}")
+            log.error(f"[GrokImageNode] Crash evitado: {str(e)}")
             return (GrokCore.create_error_tensor(),)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. NODO V2 MASTER - Text-to-Image & Image-to-Image (Edición)
-# ══════════════════════════════════════════════════════════════════════════════
+# ======================================================================
+# 2. NODO V2 MASTER - Text-to-Image & Image-to-Image (Edicion)
+# ======================================================================
 class Grok_Image_Master:
     """
     Nodo V2: Generador avanzado.
-    Si se conecta una imagen base, cambia automáticamente al endpoint de edición.
-    Si la API rechaza el prompt por NSFW, devuelve una imagen roja en vez de crashear.
+    Sin imagen conectada -> Text-to-Image (POST /v1/images/generations).
+    Con imagen conectada -> Image-to-Image (POST /v1/images/edits).
+    Anti-crash: imagen roja si la API falla o rechaza por NSFW.
     """
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "Transform the background into a snowy mountain"}),
-                "model": (GROK_IMAGE_MODELS, {"default": "grok-2-image-1212"}),
-                "aspect_ratio": (ASPECT_RATIOS, {"default": "1:1"}),
+                "model": (IMAGE_MODELS, {"default": "grok-imagine-image"}),
+                "aspect_ratio": (IMAGE_ASPECT_RATIOS, {"default": "1:1"}),
+                "resolution": (["1k", "2k"], {"default": "1k"}),
                 "api_key": ("STRING", {"multiline": False, "default": ""}),
             },
             "optional": {
-                "image": ("IMAGE",),       # Imagen base a editar
-                "mask": ("MASK",),         # (Opcional) Máscara para inpainting
-                "strength": ("FLOAT", {"default": 0.8, "min": 0.1, "max": 1.0, "step": 0.05}),
-            }
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "n": ("INT", {
+                    "default": 1, "min": 1, "max": 10, "step": 1,
+                    "tooltip": "Numero de imagenes a generar (1-10).",
+                }),
+            },
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -112,64 +118,67 @@ class Grok_Image_Master:
     FUNCTION = "generate_master"
     CATEGORY = "xAI/Grok"
 
-    def generate_master(self, prompt, model, aspect_ratio, api_key, image=None, mask=None, strength=0.8):
+    def generate_master(self, prompt, model, aspect_ratio, resolution, api_key,
+                        image=None, mask=None, n=1):
         key = api_key.strip() or os.getenv("XAI_API_KEY", "")
-        core = GrokCore(key) if key else None
-        
-        if not core:
-            log.error("[Grok_Image_Master] Error: API Key no configurada.")
-            # Sistema Anti-crash: devolvemos tensor rojo si no hay llave
-            # Es necesario instanciar GrokCore al menos para el método estático si no usamos la clase directamente
+        if not key:
+            log.error("[Grok_Image_Master] API Key no configurada.")
             return (GrokCore.create_error_tensor(),)
 
         try:
-            # --- MODO 1: TEXT-TO-IMAGE (Sin imagen conectada) ---
+            core = GrokCore(key)
+
+            # --- MODO 1: TEXT-TO-IMAGE ---
             if image is None:
                 log.info("[Grok_Image_Master] Modo: Text-to-Image")
-                size = "1024x1024"
-                if aspect_ratio == "16:9": size = "1280x720"
-                elif aspect_ratio == "9:16": size = "720x1280"
-                
-                res = core.generate_image(prompt=prompt, model=model, size=size)
-                
+                res = core.generate_image(
+                    prompt=prompt, model=model,
+                    aspect_ratio=aspect_ratio, resolution=resolution, n=n,
+                )
+
                 if res.get("error"):
                     log.error(f"API Error: {res.get('message')}")
                     return (core.create_error_tensor(),)
-                    
-                b64_img = res["data"][0]["b64_json"]
-                return (core.base64_to_tensor(b64_img),)
 
-            # --- MODO 2: IMAGE-TO-IMAGE / EDIT (Con imagen conectada) ---
-            log.info("[Grok_Image_Master] Modo: Image-to-Image / Edición")
-            
-            # Convertimos la imagen de ComfyUI (Tensor) a Base64
+                return self._extract_images(core, res)
+
+            # --- MODO 2: IMAGE-TO-IMAGE / EDIT ---
+            log.info("[Grok_Image_Master] Modo: Image-to-Image / Edicion")
             img_b64 = core.tensor_to_base64(image, format="PNG")
-            
-            # Endpoint estándar REST para edición de imágenes
-            url = f"{XAI_API_BASE}/images/edits"
-            
-            # Construimos el payload
-            payload = {
-                "image": f"data:image/png;base64,{img_b64}",
-                "prompt": prompt,
-                "model": model,
-                "response_format": "b64_json"
-            }
-            
-            # Realizamos la petición HTTP Pura
-            response = requests.post(url, headers=core.headers, json=payload, timeout=180)
-            
-            if not response.ok:
-                err_msg = response.json().get("error", {}).get("message", response.text)
-                log.error(f"[Grok_Image_Master] Error de Edición HTTP {response.status_code}: {err_msg}")
+            image_data_uri = f"data:image/png;base64,{img_b64}"
+
+            res = core.edit_image(
+                prompt=prompt, image_url=image_data_uri, model=model, n=n,
+            )
+
+            if res.get("error"):
+                log.error(f"[Grok_Image_Master] Error: {res.get('message')}")
                 return (core.create_error_tensor(),)
-                
-            res_json = response.json()
-            b64_result = res_json["data"][0]["b64_json"]
-            
-            # Retornamos el tensor convertido
-            return (core.base64_to_tensor(b64_result),)
+
+            return self._extract_images(core, res)
 
         except Exception as e:
-            log.error(f"[Grok_Image_Master] Crash fatal interceptado: {str(e)}")
+            log.error(f"[Grok_Image_Master] Crash interceptado: {str(e)}")
             return (GrokCore.create_error_tensor(),)
+
+    @staticmethod
+    def _extract_images(core, res):
+        """Extrae imagenes de la respuesta y las concatena en tensor batch."""
+        data_list = res.get("data", [])
+        if not data_list:
+            return (core.create_error_tensor(),)
+
+        tensors = []
+        for item in data_list:
+            b64 = item.get("b64_json")
+            if b64:
+                tensors.append(core.base64_to_tensor(b64))
+            else:
+                url = item.get("url")
+                if url:
+                    tensors.append(core.url_to_tensor(url))
+
+        if not tensors:
+            return (core.create_error_tensor(),)
+
+        return (torch.cat(tensors, dim=0),)
