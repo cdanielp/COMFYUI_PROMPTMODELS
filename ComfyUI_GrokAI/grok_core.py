@@ -92,6 +92,22 @@ SYSTEM_PROMPT_METADATA_READER = (
 )
 
 
+def _extract_api_error(response) -> str:
+    """Extrae mensaje de error de la respuesta HTTP de xAI de forma segura.
+    La API puede devolver: {"error": {"message": "..."}} o {"error": "string"}
+    o incluso texto plano. Esta funcion maneja todos los casos sin crashear."""
+    try:
+        data = response.json()
+        err = data.get("error", "")
+        if isinstance(err, dict):
+            return err.get("message", str(err))
+        elif isinstance(err, str) and err:
+            return err
+        return response.text
+    except Exception:
+        return response.text
+
+
 class GrokCore:
     def __init__(self, api_key: str):
         self.api_key = api_key.strip()
@@ -212,7 +228,7 @@ class GrokCore:
             log.info(f"[GrokCore] Enviando request a {model}... (Multimodal: {bool(images_b64)})")
             response = requests.post(url, headers=self.headers, json=payload, timeout=120)
             if not response.ok:
-                err_msg = response.json().get("error", {}).get("message", response.text)
+                err_msg = _extract_api_error(response)
                 log.error(f"[GrokCore] API HTTP Error {response.status_code}: {err_msg}")
                 return {"error": True, "message": f"HTTP {response.status_code}: {err_msg}"}
             return response.json()
@@ -230,7 +246,7 @@ class GrokCore:
             log.info(f"[GrokCore] Generando imagen con {model}...")
             response = requests.post(url, headers=self.headers, json=payload, timeout=180)
             if not response.ok:
-                err_msg = response.json().get("error", {}).get("message", response.text)
+                err_msg = _extract_api_error(response)
                 log.error(f"[GrokCore] Error generando imagen: {err_msg}")
                 return {"error": True, "message": err_msg}
             return response.json()
@@ -251,7 +267,7 @@ class GrokCore:
             log.info(f"[GrokCore] Editando imagen con {model}...")
             response = requests.post(url, headers=self.headers, json=payload, timeout=180)
             if not response.ok:
-                err_msg = response.json().get("error", {}).get("message", response.text)
+                err_msg = _extract_api_error(response)
                 log.error(f"[GrokCore] Error editando imagen: {err_msg}")
                 return {"error": True, "message": err_msg}
             return response.json()
@@ -267,7 +283,7 @@ class GrokCore:
             log.info(f"[GrokCore] Enviando peticion de video a {endpoint}...")
             response = requests.post(url, headers=self.headers, json=payload, timeout=60)
             if not response.ok:
-                err_msg = response.json().get("error", {}).get("message", response.text)
+                err_msg = _extract_api_error(response)
                 return {"error": True, "message": f"HTTP {response.status_code}: {err_msg}"}
             return response.json()
         except Exception as e:
@@ -286,7 +302,7 @@ class GrokCore:
             try:
                 response = requests.get(url, headers=self.headers, timeout=30)
                 if not response.ok:
-                    err_msg = response.json().get("error", {}).get("message", response.text)
+                    err_msg = _extract_api_error(response)
                     return {"error": True, "message": f"HTTP {response.status_code}: {err_msg}"}
                 data = response.json()
                 status = data.get("status", "")
