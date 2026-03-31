@@ -1,159 +1,123 @@
-# 🧠 ComfyUI_GrokAI — Suite de xAI (Grok) para ComfyUI
+# ComfyUI_GrokAI V2.0.0 - Suite de xAI (Grok) para ComfyUI
 
-> **Grok 4.1** (Texto/Razonamiento/Visión) · **Grok 2 Image** (Generación/Edición) · **Diagnóstico** (Workflows + Modelos)
+> **Grok 4.20** (Reasoning/Non-Reasoning) - **Grok Imagine** (Image/Video) - **Diagnostico** (Workflows + Modelos)
 
-![Version](https://img.shields.io/badge/Version-1.0.0-blue)
+![Version](https://img.shields.io/badge/Version-2.0.0-blue)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Nodes](https://img.shields.io/badge/Nodos-7-green)
+![Nodes](https://img.shields.io/badge/Nodos-10-green)
 
 ---
 
-## 📑 Tabla de Contenidos
+## Changelog V2.0.0
 
-1. [Instalación](#-instalación)
-2. [Configurar API Key](#-configurar-api-key)
-3. [Nodos: Texto y Visión](#-texto-visión-y-json)
-4. [Nodos: Imagen](#-imagen)
-5. [Nodos: Diagnóstico](#-diagnóstico)
-6. [Notas Técnicas](#-notas-técnicas)
+### Breaking Changes
+- Todos los model IDs actualizados a la API xAI de Marzo 2026
+- Modelos eliminados: `grok-2-1212`, `grok-2-vision-1212`, `grok-vision-beta`, `grok-2-image-1212`, `grok-2-image`, `grok-video-preview`, `grok-video`
+- Parametro `size` en pixeles eliminado, reemplazado por `aspect_ratio` + `resolution`
+
+### Crash Fixes (P1)
+- `grok_core.py`: nuevos exports `TEXT_MODELS`, `IMAGE_MODELS`, `VIDEO_MODELS`, system prompts, `resolve_api_key()`, `chat_text()`, `url_to_tensor()`, `edit_image()`, `submit_video()`, `poll_video()`
+- `grok_diagnostic_node.py`: corregidas importaciones rotas, ahora usa simbolos de `grok_core`
+- `grok_video_node.py`: reescrito completo para API asincrona (POST -> request_id -> polling)
+- `__init__.py`: registrados `Grok_Workflow_Debugger` y `Grok_Metadata_Reader`
+
+### API Correctness (P2)
+- Imagen: `aspect_ratio` directo en payload (14 ratios soportados), parametro `resolution` (1k/2k)
+- Video: `aspect_ratio` (7 ratios), `resolution` (480p/720p), `duration` (1-15s)
+- Prompt Architect: parsing JSON robusto con fallback a texto plano
+
+### New Features (P3)
+- `Grok_Video_Editor`: edicion de video con lenguaje natural (POST /v1/videos/edits)
+- `Grok_Video_Extension`: extension de video hasta 15s total (POST /v1/videos/extensions)
+- Batch image generation: parametro `n` (1-10 imagenes por request)
 
 ---
 
-## 📦 Instalación
+## Modelos Soportados (xAI API Marzo 2026)
+
+| Tipo | Modelo | Contexto / Nota |
+|------|--------|-----------------|
+| Texto (flagship) | `grok-4.20-0309-reasoning` | 2M tokens, reasoning |
+| Texto (flagship) | `grok-4.20-0309-non-reasoning` | 2M tokens |
+| Texto (budget) | `grok-4-1-fast-reasoning` | 2M tokens, reasoning |
+| Texto (budget) | `grok-4-1-fast-non-reasoning` | 2M tokens |
+| Imagen | `grok-imagine-image` | $0.02/imagen |
+| Imagen (pro) | `grok-imagine-image-pro` | $0.07/imagen |
+| Video | `grok-imagine-video` | $0.05/segundo |
+
+---
+
+## Nodos (10 total)
+
+### Texto y Vision
+
+| Nodo | Categoria | Descripcion |
+|------|-----------|-------------|
+| Grok Text [v1 Legacy] | Grok/Legado | Texto basico, retrocompatible |
+| Grok Multimodal Vision | xAI/Grok | Hasta 5 imagenes + texto, reasoning_effort |
+| Grok Prompt Architect | xAI/Grok | Expande ideas en positive/negative prompts (JSON) |
+
+### Imagen
+
+| Nodo | Categoria | Descripcion |
+|------|-----------|-------------|
+| Grok Image [v1 Legacy] | Grok/Legado | Text-to-Image basico, retrocompatible |
+| Grok Image Master | xAI/Grok | Text-to-Image + Image-to-Image, batch 1-10, 14 aspect ratios |
+
+### Video
+
+| Nodo | Categoria | Descripcion |
+|------|-----------|-------------|
+| Grok Video Forge | xAI/Grok | Text-to-Video / Image-to-Video, 1-15s, 480p/720p |
+| Grok Video Editor | xAI/Grok | Edicion de video existente con prompt |
+| Grok Video Extension | xAI/Grok | Extension de video, hasta 15s total |
+
+### Diagnostico
+
+| Nodo | Categoria | Descripcion |
+|------|-----------|-------------|
+| Grok Workflow Debugger | Grok AI/Diagnostic | Analiza workflow JSON, identifica repos y conflictos |
+| Grok Metadata Reader | Grok AI/Diagnostic | Lee .safetensors, identifica arquitectura y triggers |
+
+---
+
+## Instalacion
 
 ```bash
 cd ComfyUI/custom_nodes/
-git clone https://github.com/cdanielp/ComfyUI_GrokAI.git
-cd ComfyUI_GrokAI
-pip install -r requirements.txt
+git clone https://github.com/cdanielp/COMFYUI_PROMPTMODELS.git
+pip install -r COMFYUI_PROMPTMODELS/ComfyUI_GrokAI/requirements.txt
 ```
 
-Reinicia ComfyUI y los 7 nodos aparecerán en la categoría **Grok AI**.
+Reinicia ComfyUI. Los 10 nodos aparecen en las categorias `xAI/Grok`, `Grok/Legado` y `Grok AI/Diagnostic`.
 
 ---
 
-## 🔑 Configurar API Key
+## Configurar API Key
 
-Obtén tu API Key en [console.x.ai](https://console.x.ai).
+Obten tu API Key en [console.x.ai](https://console.x.ai).
 
-| Prioridad | Fuente | Cómo |
+| Prioridad | Fuente | Como |
 |:---------:|--------|------|
-| 1️⃣ | Campo del nodo | Escribir directo en `api_key` |
-| 2️⃣ | Variable de entorno | `export XAI_API_KEY="xai-..."` |
-
-Si no hay clave en ninguna fuente, el nodo lanza un error limpio sin crashear.
+| 1 | Campo del nodo | Escribir directo en `api_key` |
+| 2 | Variable de entorno | `set XAI_API_KEY=xai-...` (Windows) |
 
 ---
 
-## 🧠 Texto, Visión y JSON
+## Notas Tecnicas
 
-### 🧠 Grok_Text_Advanced
-
-Generación de texto con control de razonamiento.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `prompt` | STRING | ✅ | Prompt de texto |
-| `model` | COMBO | ✅ | grok-4.1-fast-reasoning, etc. |
-| `reasoning_effort` | COMBO | ✅ | **Off** = no envía el parámetro. Low/High activan razonamiento |
-| `api_key` | STRING | ❌ | Opcional si usas variable de entorno |
-| `system_prompt` | STRING | ❌ | Instrucción de sistema |
-| `temperature` | FLOAT | ❌ | 0.0-2.0 |
-| `max_tokens` | INT | ❌ | 64-131072 |
-| **Output** | `text` STRING | | |
-
-### 👁️ Grok_Vision_Analyzer
-
-Analiza imágenes con Grok Vision. Envía tensor como base64 automáticamente.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `image` | IMAGE | ✅ | Imagen a analizar |
-| `prompt` | STRING | ✅ | Pregunta sobre la imagen |
-| `model` | COMBO | ✅ | Modelo con capacidad visual |
-| `detail` | COMBO | ✅ | `low` o `high` |
-| **Output** | `analysis` STRING | | |
-
-### 📋 Grok_JSON_Formatter
-
-Fuerza respuesta en JSON estricto (Structured Outputs). Ideal para parsear prompts.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `prompt` | STRING | ✅ | Lo que quieres generar |
-| `json_schema` | STRING | ✅ | Esquema JSON de la estructura deseada |
-| **Output** | `json_string` STRING | | JSON limpio y parseado |
-
-**Ejemplo de json_schema:**
-```json
-{"subject": "string", "style": "string", "mood": "string"}
-```
+- **Cero SDKs** -- Toda la comunicacion usa `requests` HTTP puras contra `api.x.ai/v1`
+- **Anti-Crash** -- Errores retornan imagen roja 512x512 en vez de crashear
+- **Video Asincrono** -- Submit + polling (configurable timeout e intervalo)
+- **Tensores estandar** -- `[B, H, W, C]` float `0.0-1.0` (formato PyTorch de ComfyUI)
+- **Batch Images** -- Parametro `n` genera hasta 10 imagenes, retornadas como tensor batch
 
 ---
 
-## 🎨 Imagen
-
-### 🎨 Grok_Image_Generator
-
-Generación Text-to-Image. **Anti-crash:** errores HTTP retornan imagen roja 512×512.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `prompt` | STRING | ✅ | Descripción de la imagen |
-| `model` | COMBO | ✅ | grok-2-image-1212, grok-2-image |
-| `aspect_ratio` | COMBO | ✅ | 1:1, 16:9, 9:16, 4:3, 3:4 |
-| `batch_size` | INT | ✅ | 1-4 imágenes |
-| **Output** | `images` IMAGE (batch) | | |
-
-### ✏️ Grok_Image_Editor
-
-Edición de imágenes con lenguaje natural.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `image` | IMAGE | ✅ | Imagen base a editar |
-| `prompt` | STRING | ✅ | Instrucción de edición |
-| **Output** | `edited_image` IMAGE | | |
-
----
-
-## 🔧 Diagnóstico
-
-### 🔧 Grok_Workflow_Debugger
-
-Analiza un workflow JSON. `fun_mode` = Grok responde con sarcasmo pero da la solución.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `workflow_json` | STRING | ✅ | JSON del workflow o ruta al archivo |
-| `fun_mode` | BOOLEAN | ✅ | True = sarcasmo + solución real |
-| **Output** | `analysis_report` STRING | | |
-
-### 🔍 Grok_Metadata_Reader
-
-Lee un .safetensors y Grok identifica arquitectura + trigger words.
-
-| Input | Tipo | Req | Descripción |
-|-------|------|:---:|-------------|
-| `safetensors_path` | STRING | ✅ | Ruta al archivo .safetensors |
-| **Output** | `metadata_summary` STRING | | |
-
----
-
-## 📝 Notas Técnicas
-
-- **Cero SDKs** — Toda la comunicación usa `requests` HTTP puras contra `api.x.ai/v1`
-- **Anti-Crash** — Errores HTTP 400 (safety/NSFW) y 429 (rate limit) retornan una **imagen roja de 512×512** con el error impreso, en vez de crashear el workflow
-- **Tensores estándar** — `[B, H, W, C]` float `0.0-1.0` (formato PyTorch de ComfyUI)
-- **Reasoning effort** — `Off` no envía el parámetro al JSON; `Low`/`High` activan razonamiento de Grok
-- **JSON Formatter** — Usa `response_format: json_object` + validación post-respuesta
-
----
-
-## 📄 Licencia
+## Licencia
 
 MIT
 
 ---
 
-Desarrollado por **[Prompt Models Studio](https://github.com/cdanielp)** 🇲🇽
+Desarrollado por **[Prompt Models Studio](https://github.com/cdanielp)**
