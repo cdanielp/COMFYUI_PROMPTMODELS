@@ -1,4 +1,4 @@
-# ComfyUI_GoogleAI V2.5.0
+# ComfyUI_GoogleAI V2.5.1
 
 **Suite completa de Google AI para ComfyUI** — Nano Banana 2/Pro | Imagen 4 | Veo 3.1 + Audio | Diagnostico
 
@@ -7,7 +7,7 @@
 
 ---
 
-## Novedades V2.5.0
+## Novedades V2.5.1
 
 ### Nuevo nodo estrella: Nano Banana (NB2/Pro)
 
@@ -172,6 +172,12 @@ scipy>=1.10.0
 ---
 
 ## Changelog
+
+### V2.5.1 (Mar 2026)
+- **Fix:** Seed capped to 32-bit (max 4,294,967,295) — fixes UI precision loss and API rejections
+- **Fix:** `seed=0` now correctly sent to API for reproducibility (was treated as "no seed")
+- **Fix:** Random seed generation uses 32-bit range matching API constraints
+- Compatible with ComfyUI Manager and Comfy Registry
 
 ### V2.5.0 (Mar 2026)
 - Nano Banana 2 model support

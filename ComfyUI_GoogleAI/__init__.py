@@ -1,9 +1,9 @@
 """
-ComfyUI_GoogleAI - Suite Integral de Google AI (V2.5.0)
+ComfyUI_GoogleAI - Suite Integral de Google AI (V2.5.1)
 =======================================================
 Nano Banana 2/Pro/Original | Imagen 4 | Veo 3.1 + Audio | Diagnostico
 
-Novedades V2.5.0:
+Novedades V2.5.1:
 - NUEVO: GoogleAI_NanoBananaNode (nodo estrella - NB2/Pro/Original)
 - NUEVO: Nano Banana 2 (gemini-3.1-flash-image-preview) - Feb 26, 2026
 - 14 aspect ratios oficiales + imageSize separado (512px/0.5K/1K/2K/4K)
@@ -89,7 +89,7 @@ try:
     async def health_check(request):
         return web.json_response({
             "status": "ok",
-            "version": "2.5.0",
+            "version": "2.5.1",
             "nodes": len(NODE_CLASS_MAPPINGS),
             "suites": ["text", "image", "video", "diagnostic"],
             "image_models": [
@@ -111,7 +111,7 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 _n = len(NODE_CLASS_MAPPINGS)
 print(
     f"\n{'='*65}\n"
-    f"  ComfyUI_GoogleAI V2.5.0 -- {_n} nodos\n"
+    f"  ComfyUI_GoogleAI V2.5.1 -- {_n} nodos\n"
     f"  Texto  | Vision (5 imagenes)\n"
     f"  Imagen: Nano Banana 2/Pro + Imagen 4 (14 aspect ratios)\n"
     f"  Veo 3.1 + Audio ffmpeg | Diagnostico (5 nodos)\n"

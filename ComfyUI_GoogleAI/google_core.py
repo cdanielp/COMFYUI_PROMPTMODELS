@@ -510,7 +510,7 @@ class GoogleAICore:
                 "imageSize": validated_size,
             },
         }
-        if seed:
+        if seed is not None and seed >= 0:
             gen_config["seed"] = seed
 
         payload: Dict[str, Any] = {

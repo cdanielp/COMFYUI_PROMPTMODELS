@@ -81,7 +81,7 @@ class GoogleAI_NanoBananaNode:
                         "NB original: max 1K (downgrade automatico)."
                     ),
                 }),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
                 "randomize_seed": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -131,7 +131,7 @@ class GoogleAI_NanoBananaNode:
     ):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            effective_seed = random.randint(0, 0xffffffffffffffff) if randomize_seed else seed
+            effective_seed = random.randint(0, 0xFFFFFFFF) if randomize_seed else seed
 
             ref_images_b64 = []
             for ref in [image_1, image_2, image_3, image_4, image_5]:
@@ -204,7 +204,7 @@ class GoogleAI_ImageNode:
                 "prompt": ("STRING", {"multiline": True, "default": "A beautiful cinematic portrait"}),
                 "model": (IMAGEN_MODELS, {"default": "imagen-4.0-generate-001"}),
                 "aspect_ratio": (IMAGEN_ASPECT_RATIOS, {"default": "1:1"}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
                 "randomize_seed": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -222,7 +222,7 @@ class GoogleAI_ImageNode:
                        api_key="", negative_prompt=""):
         try:
             key = GoogleAICore.resolve_api_key(api_key)
-            effective_seed = random.randint(0, 0xffffffffffffffff) if randomize_seed else seed
+            effective_seed = random.randint(0, 0xFFFFFFFF) if randomize_seed else seed
 
             logger.info(
                 f"[ImageNode] Imagen '{model}' | {aspect_ratio} | seed={effective_seed}"
