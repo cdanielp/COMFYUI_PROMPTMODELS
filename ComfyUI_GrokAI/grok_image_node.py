@@ -125,41 +125,34 @@ class Grok_Image_Master:
             log.error("[Grok_Image_Master] API Key no configurada.")
             return (GrokCore.create_error_tensor(),)
 
-        try:
-            core = GrokCore(key)
+        core = GrokCore(key)
 
-            # --- MODO 1: TEXT-TO-IMAGE ---
-            if image is None:
-                log.info("[Grok_Image_Master] Modo: Text-to-Image")
-                res = core.generate_image(
-                    prompt=prompt, model=model,
-                    aspect_ratio=aspect_ratio, resolution=resolution, n=n,
-                )
-
-                if res.get("error"):
-                    log.error(f"API Error: {res.get('message')}")
-                    return (core.create_error_tensor(),)
-
-                return self._extract_images(core, res)
-
-            # --- MODO 2: IMAGE-TO-IMAGE / EDIT ---
-            log.info("[Grok_Image_Master] Modo: Image-to-Image / Edicion")
-            img_b64 = core.tensor_to_base64(image, format="PNG")
-            image_data_uri = f"data:image/png;base64,{img_b64}"
-
-            res = core.edit_image(
-                prompt=prompt, image_url=image_data_uri, model=model, n=n,
+        # --- MODO 1: TEXT-TO-IMAGE ---
+        if image is None:
+            log.info("[Grok_Image_Master] Modo: Text-to-Image")
+            res = core.generate_image(
+                prompt=prompt, model=model,
+                aspect_ratio=aspect_ratio, resolution=resolution, n=n,
             )
 
             if res.get("error"):
-                log.error(f"[Grok_Image_Master] Error: {res.get('message')}")
-                return (core.create_error_tensor(),)
+                raise RuntimeError(f"API Error: {res.get('message')}")
 
             return self._extract_images(core, res)
 
-        except Exception as e:
-            log.error(f"[Grok_Image_Master] Crash interceptado: {str(e)}")
-            return (GrokCore.create_error_tensor(),)
+        # --- MODO 2: IMAGE-TO-IMAGE / EDIT ---
+        log.info("[Grok_Image_Master] Modo: Image-to-Image / Edicion")
+        img_b64 = core.tensor_to_base64(image, format="PNG")
+        image_data_uri = f"data:image/png;base64,{img_b64}"
+
+        res = core.edit_image(
+            prompt=prompt, image_url=image_data_uri, model=model, n=n,
+        )
+
+        if res.get("error"):
+            raise RuntimeError(f"[Grok_Image_Master] Error: {res.get('message')}")
+
+        return self._extract_images(core, res)
 
     @staticmethod
     def _extract_images(core, res):
