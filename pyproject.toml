@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
-description = "Custom nodes for ComfyUI by PROMPTMODELS. Includes Google AI (Gemini · Nano Banana · Imagen 4 · Veo 3.1), Grok V2.0, Logic Utils, and Conflict-Free Set/Get Nodes."
-version = "1.4.0"
+description = "Custom nodes for ComfyUI by PROMPTMODELS. Includes Google AI (Gemini · Nano Banana · Imagen 4 · Veo 3.1), Grok V2.0, Logic Utils, and Conflict-Free Set/Get Nodes. Now includes BatchEscenas: sequential batch processing for voice+video pipelines."
+version = "1.5.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
@@ -22,5 +22,6 @@ Includes = [
   "DivisorDePrompts",
   "get_last_frame",
   "text_prompt_blocker",
-  "comfyui_selectores_pro"
+  "comfyui_selectores_pro",
+  "BatchEscenas"
 ]

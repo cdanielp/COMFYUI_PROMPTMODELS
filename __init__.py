@@ -2,7 +2,7 @@
 #  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
 # ============================================================
 
-__version__ = "1.3.2"
+__version__ = "1.5.0"
 __author__ = "Prompt Models Studio"
 
 GREEN = "\033[92m"
@@ -103,6 +103,18 @@ try:
     print(f"{GREEN}[Selectores Pro] ✅ Loaded{RESET}")
 except Exception as e:
     print(f"{RED}[Selectores Pro] ⚠️ Failed: {e}{RESET}")
+
+# --- BatchEscenas ---
+try:
+    from .BatchEscenas import (
+        NODE_CLASS_MAPPINGS as BATCH_ESCENAS_CLASS,
+        NODE_DISPLAY_NAME_MAPPINGS as BATCH_ESCENAS_NAMES,
+    )
+    NODE_CLASS_MAPPINGS.update(BATCH_ESCENAS_CLASS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(BATCH_ESCENAS_NAMES)
+    print(f"{GREEN}[BatchEscenas] ✅ Loaded{RESET}")
+except Exception as e:
+    print(f"{RED}[BatchEscenas] ⚠️ Failed: {e}{RESET}")
 
 # ============================================================
 #  LOG FINAL Y EXPORTACIONES DE COMFYUI
