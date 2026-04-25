@@ -118,6 +118,11 @@ class Grok_Image_Master:
     FUNCTION = "generate_master"
     CATEGORY = "xAI/Grok"
 
+    # Force node to always generate
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
     def generate_master(self, prompt, model, aspect_ratio, resolution, api_key,
                         image=None, mask=None, n=1):
         key = api_key.strip() or os.getenv("XAI_API_KEY", "")
