@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
 description = "Custom nodes for ComfyUI by PROMPTMODELS. Google AI (Gemini 3.1 · Nano Banana) and Grok suite (Chat · Image · Video · TTS · STT). Zero SDKs, native REST."
-version = "2.0.0"
+version = "2.0.1"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
