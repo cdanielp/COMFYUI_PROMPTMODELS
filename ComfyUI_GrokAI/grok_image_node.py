@@ -1,182 +1,122 @@
-# ==============================================================================
-# grok_image_node.py - Generador y Editor de Imagenes de ComfyUI_Grok
-# ==============================================================================
-# V1 (Legado) para Text-to-Image puro.
-# V2 (Grok_Image_Master) con soporte para Image-to-Image (edicion).
-# Anti-Crash: imagen roja para errores de API.
-#
-# API xAI 2026: aspect_ratio + resolution (no size en pixeles).
-# ==============================================================================
+"""
+grok_image_node.py - PMS_GrokImageGen v2.0.0
+=============================================
+Fusion de GrokImageNode + Grok_Image_Master en un solo nodo.
+Sin imagen: POST /v1/images/generations (text-to-image).
+Con imagen: POST /v1/images/edits (image-to-image, JSON no multipart).
+Model ID: grok-imagine-image.
+La API devuelve URL temporal -> descarga con requests y convierte a tensor.
+Anti-crash: imagen roja 512x512 si la API falla.
+"""
 
 import os
 import logging
+import requests
 import torch
-from .grok_core import GrokCore, IMAGE_MODELS, IMAGE_ASPECT_RATIOS
+from .grok_core import GrokCore
 
-log = logging.getLogger("ComfyUI_GrokImage")
+logger = logging.getLogger("ComfyUI_PromptModels")
 
-
-# ======================================================================
-# 1. NODO LEGADO (V1) - Text-to-Image Basico
-# ======================================================================
-class GrokImageNode:
-    """Nodo V1: generacion pura desde texto. Retrocompatibilidad."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "prompt": ("STRING", {"multiline": True, "default": "A futuristic city in cyberpunk style"}),
-                "model": (IMAGE_MODELS, {"default": "grok-imagine-image"}),
-                "aspect_ratio": (IMAGE_ASPECT_RATIOS, {"default": "1:1"}),
-                "resolution": (["1k", "2k"], {"default": "1k"}),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 10}),
-                "api_key": ("STRING", {"multiline": False, "default": ""}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
-    FUNCTION = "generate"
-    CATEGORY = "Grok/Legado"
-
-    def generate(self, prompt, model, aspect_ratio, resolution, batch_size, api_key):
-        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
-        if not key:
-            log.error("[GrokImageNode] No hay API Key.")
-            return (GrokCore.create_error_tensor(),)
-
-        try:
-            core = GrokCore(key)
-            res = core.generate_image(
-                prompt=prompt, model=model,
-                aspect_ratio=aspect_ratio, resolution=resolution, n=batch_size,
-            )
-
-            if res.get("error"):
-                log.error(f"[GrokImageNode] API Error: {res.get('message')}")
-                return (core.create_error_tensor(),)
-
-            data_list = res.get("data", [])
-            if not data_list:
-                log.error("[GrokImageNode] Respuesta vacia de la API.")
-                return (core.create_error_tensor(),)
-
-            tensors = []
-            for item in data_list:
-                b64 = item.get("b64_json")
-                if b64:
-                    tensors.append(core.base64_to_tensor(b64))
-                else:
-                    url = item.get("url")
-                    if url:
-                        tensors.append(core.url_to_tensor(url))
-
-            if not tensors:
-                return (core.create_error_tensor(),)
-
-            return (torch.cat(tensors, dim=0),)
-
-        except Exception as e:
-            log.error(f"[GrokImageNode] Crash evitado: {str(e)}")
-            return (GrokCore.create_error_tensor(),)
+_MODEL_ID      = "grok-imagine-image"
+_ASPECT_RATIOS = ["1:1", "2:3", "3:2"]
 
 
-# ======================================================================
-# 2. NODO V2 MASTER - Text-to-Image & Image-to-Image (Edicion)
-# ======================================================================
-class Grok_Image_Master:
+class PMS_GrokImageGen:
     """
-    Nodo V2: Generador avanzado.
-    Sin imagen conectada -> Text-to-Image (POST /v1/images/generations).
-    Con imagen conectada -> Image-to-Image (POST /v1/images/edits).
-    Anti-crash: imagen roja si la API falla o rechaza por NSFW.
+    Grok Image Gen. Genera o edita imagenes.
+    Sin image_ref: text-to-image via /v1/images/generations.
+    Con image_ref: image-to-image via /v1/images/edits (JSON).
+    Output: tensor IMAGE + URL o mensaje de error.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": "Transform the background into a snowy mountain"}),
-                "model": (IMAGE_MODELS, {"default": "grok-imagine-image"}),
-                "aspect_ratio": (IMAGE_ASPECT_RATIOS, {"default": "1:1"}),
-                "resolution": (["1k", "2k"], {"default": "1k"}),
-                "api_key": ("STRING", {"multiline": False, "default": ""}),
-            },
-            "optional": {
-                "image": ("IMAGE",),
-                "mask": ("MASK",),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "A futuristic city in cyberpunk style",
+                }),
+                "aspect_ratio": (_ASPECT_RATIOS, {"default": "1:1"}),
                 "n": ("INT", {
-                    "default": 1, "min": 1, "max": 10, "step": 1,
-                    "tooltip": "Numero de imagenes a generar (1-10).",
+                    "default": 1, "min": 1, "max": 4, "step": 1,
+                    "tooltip": "Numero de imagenes a generar (1-4).",
                 }),
             },
+            "optional": {
+                "image_ref": ("IMAGE", {
+                    "tooltip": "Imagen de referencia para edicion (image-to-image).",
+                }),
+                "api_key": ("STRING", {"default": ""}),
+            },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate_master"
-    CATEGORY = "xAI/Grok"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("imagen", "url_o_error")
+    FUNCTION = "generar"
+    CATEGORY = "PromptModels/Grok"
 
-    # Force node to always generate
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
 
-    def generate_master(self, prompt, model, aspect_ratio, resolution, api_key,
-                        image=None, mask=None, n=1):
-        key = api_key.strip() or os.getenv("XAI_API_KEY", "")
+    def generar(self, prompt, aspect_ratio, n, image_ref=None, api_key=""):
+        key = (api_key or "").strip() or os.getenv("XAI_API_KEY", "")
         if not key:
-            log.error("[Grok_Image_Master] API Key no configurada.")
-            return (GrokCore.create_error_tensor(),)
+            logger.error("[PMS_GrokImageGen] API Key no configurada.")
+            return (GrokCore.create_error_tensor(), "Error: API Key de xAI requerida.")
 
-        core = GrokCore(key)
+        try:
+            core = GrokCore(key)
 
-        # --- MODO 1: TEXT-TO-IMAGE ---
-        if image is None:
-            log.info("[Grok_Image_Master] Modo: Text-to-Image")
-            res = core.generate_image(
-                prompt=prompt, model=model,
-                aspect_ratio=aspect_ratio, resolution=resolution, n=n,
-            )
+            if image_ref is None:
+                logger.info("[PMS_GrokImageGen] Modo: text-to-image")
+                res = core.generate_image(
+                    prompt=prompt,
+                    model=_MODEL_ID,
+                    aspect_ratio=aspect_ratio,
+                    n=n,
+                    response_format="url",
+                )
+            else:
+                logger.info("[PMS_GrokImageGen] Modo: image-to-image (edits)")
+                img_b64 = core.tensor_to_base64(image_ref, format="PNG")
+                image_data_uri = f"data:image/png;base64,{img_b64}"
+                res = core.edit_image(
+                    prompt=prompt,
+                    image_url=image_data_uri,
+                    model=_MODEL_ID,
+                    n=n,
+                    response_format="url",
+                )
 
             if res.get("error"):
-                raise RuntimeError(f"API Error: {res.get('message')}")
+                msg = res.get("message", "Error desconocido de la API.")
+                logger.error(f"[PMS_GrokImageGen] API Error: {msg}")
+                return (GrokCore.create_error_tensor(), f"Error: {msg}")
 
-            return self._extract_images(core, res)
+            data_list = res.get("data", [])
+            if not data_list:
+                logger.error("[PMS_GrokImageGen] Respuesta vacia de la API.")
+                return (GrokCore.create_error_tensor(), "Error: respuesta vacia de la API.")
 
-        # --- MODO 2: IMAGE-TO-IMAGE / EDIT ---
-        log.info("[Grok_Image_Master] Modo: Image-to-Image / Edicion")
-        img_b64 = core.tensor_to_base64(image, format="PNG")
-        image_data_uri = f"data:image/png;base64,{img_b64}"
-
-        res = core.edit_image(
-            prompt=prompt, image_url=image_data_uri, model=model, n=n,
-        )
-
-        if res.get("error"):
-            raise RuntimeError(f"[Grok_Image_Master] Error: {res.get('message')}")
-
-        return self._extract_images(core, res)
-
-    @staticmethod
-    def _extract_images(core, res):
-        """Extrae imagenes de la respuesta y las concatena en tensor batch."""
-        data_list = res.get("data", [])
-        if not data_list:
-            return (core.create_error_tensor(),)
-
-        tensors = []
-        for item in data_list:
-            b64 = item.get("b64_json")
-            if b64:
-                tensors.append(core.base64_to_tensor(b64))
-            else:
-                url = item.get("url")
+            tensors = []
+            first_url = ""
+            for item in data_list:
+                url = item.get("url", "")
+                b64 = item.get("b64_json", "")
                 if url:
                     tensors.append(core.url_to_tensor(url))
+                    if not first_url:
+                        first_url = url
+                elif b64:
+                    tensors.append(core.base64_to_tensor(b64))
 
-        if not tensors:
-            return (core.create_error_tensor(),)
+            if not tensors:
+                return (GrokCore.create_error_tensor(), "Error: sin imagenes validas en respuesta.")
 
-        return (torch.cat(tensors, dim=0),)
+            return (torch.cat(tensors, dim=0), first_url)
+
+        except Exception as e:
+            logger.error(f"[PMS_GrokImageGen] Error: {e}")
+            return (GrokCore.create_error_tensor(), f"Error: {str(e)}")

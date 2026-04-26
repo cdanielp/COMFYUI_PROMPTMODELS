@@ -20,12 +20,11 @@ log = logging.getLogger("ComfyUI_GrokCore")
 
 XAI_API_BASE = "https://api.x.ai/v1"
 
-# -- Modelos actualizados (xAI API - Marzo 2026) ------------------------------
+# -- Modelos actualizados (xAI API - Abril 2026) ------------------------------
 TEXT_MODELS = [
-    "grok-4.20-0309-reasoning",
-    "grok-4.20-0309-non-reasoning",
-    "grok-4-1-fast-reasoning",
-    "grok-4-1-fast-non-reasoning",
+    "grok-4.20",
+    "grok-4.1",
+    "grok-4.1-fast",
 ]
 
 IMAGE_MODELS = [
