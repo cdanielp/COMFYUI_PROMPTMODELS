@@ -30,6 +30,7 @@ TEXT_MODELS = [
 IMAGE_MODELS = [
     "grok-imagine-image",
     "grok-imagine-image-pro",
+    "grok-imagine-image-quality",
 ]
 
 VIDEO_MODELS = [
