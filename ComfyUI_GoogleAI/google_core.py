@@ -965,47 +965,11 @@ class GoogleAICore:
                 return frames_t
 
             except Exception as tv_e:
-                logger.warning(f"[Video] Falló torchvision: {tv_e} → fallback OpenCV")
-
-                import cv2
-                cap = cv2.VideoCapture(decode_path)
-                if not cap.isOpened():
-                    raise RuntimeError(
-                        f"No se pudo abrir el video con OpenCV. "
-                        f"Archivo: {decode_path}, existe: {os.path.exists(decode_path)}"
-                    )
-
-                frames = []
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                    frames.append(rgb)
-                cap.release()
-
-                if not frames:
-                    raise RuntimeError("El video no contiene frames descifrables.")
-
-                stacked = np.stack(frames, axis=0)
-                tensor = torch.from_numpy(stacked)
-
-                fmin = tensor.min().item()
-                fmax = tensor.max().item()
-                fmean = tensor.mean().item()
-                logger.info(
-                    f"[Video (OpenCV)] {tensor.shape[0]} frames, "
-                    f"{tensor.shape[2]}x{tensor.shape[1]} | "
-                    f"min={fmin:.4f} max={fmax:.4f} mean={fmean:.4f}"
+                raise RuntimeError(
+                    f"Video decoding falló (torchvision error: {tv_e}). "
+                    "cv2 no está disponible en este paquete. "
+                    "Asegúrate de que torchvision esté instalado: pip install torchvision"
                 )
-
-                if fmax < 0.01:
-                    if transcode_result is None:
-                        logger.error("⚠️ [Video] FRAMES NEGROS — ffmpeg no disponible.")
-                    else:
-                        logger.error("⚠️ [Video] FRAMES NEGROS después de transcodificar.")
-
-                return tensor
 
         finally:
             for path in [tmp_path, h264_path]:

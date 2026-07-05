@@ -1,130 +1,38 @@
 # ============================================================
-#  PROMPTMODELS STUDIO - Custom Node Loader for ComfyUI
+#  PROMPTMODELS STUDIO — v3.0.0 (rama v3-migration)
 # ============================================================
+import logging
 
-__version__ = "2.0.1"
-__author__ = "Prompt Models Studio"
+log = logging.getLogger("promptmodels")
 
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-RED    = "\033[91m"
-RESET  = "\033[0m"
-
-print(f"{GREEN}[PromptModels Studio] Loading custom nodes for ComfyUI v{__version__}...{RESET}")
-
-NODE_CLASS_MAPPINGS        = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
-
-# ============================================================
-#  MODULOS UTILITARIOS (sin cambios)
-# ============================================================
-
-# --- GetLastFrame ---
 try:
-    from .get_last_frame import (
-        NODE_CLASS_MAPPINGS        as GET_LAST_FRAME_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as GET_LAST_FRAME_NAMES,
+    from comfy_api.latest import io, ComfyExtension
+except ImportError:
+    log.error(
+        "[promptmodels] promptmodels 3.x requiere ComfyUI >= 0.26.0. "
+        "Actualiza ComfyUI o instala promptmodels@2.x"
     )
-    NODE_CLASS_MAPPINGS.update(GET_LAST_FRAME_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(GET_LAST_FRAME_NAMES)
-    print(f"{GREEN}[GetLastFrame] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[GetLastFrame] Failed: {e}{RESET}")
+    raise
 
-# --- TextPromptBlocker ---
 try:
-    from .text_prompt_blocker import (
-        NODE_CLASS_MAPPINGS        as TEXT_PROMPT_BLOCKER_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as TEXT_PROMPT_BLOCKER_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(TEXT_PROMPT_BLOCKER_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(TEXT_PROMPT_BLOCKER_NAMES)
-    print(f"{GREEN}[TextPromptBlocker] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[TextPromptBlocker] Failed: {e}{RESET}")
-
-# --- DivisorDePrompts ---
-try:
-    from .DivisorDePrompts import (
-        NODE_CLASS_MAPPINGS        as DIVISOR_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as DIVISOR_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(DIVISOR_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(DIVISOR_NAMES)
-    print(f"{GREEN}[DivisorDePrompts] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[DivisorDePrompts] Failed: {e}{RESET}")
-
-# --- GETSETNODE_PRO ---
-try:
-    from .GETSETNODE_PRO import (
-        NODE_CLASS_MAPPINGS        as PRO_SETGET_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as PRO_SETGET_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(PRO_SETGET_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(PRO_SETGET_NAMES)
-    print(f"{GREEN}[GETSETNODE_PRO] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[GETSETNODE_PRO] Failed: {e}{RESET}")
-
-# --- comfyui_selectores_pro ---
-try:
-    from .comfyui_selectores_pro import (
-        NODE_CLASS_MAPPINGS        as SELECTORES_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as SELECTORES_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(SELECTORES_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(SELECTORES_NAMES)
-    print(f"{GREEN}[Selectores Pro] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[Selectores Pro] Failed: {e}{RESET}")
-
-# --- BatchEscenas ---
-try:
-    from .BatchEscenas import (
-        NODE_CLASS_MAPPINGS        as BATCH_ESCENAS_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as BATCH_ESCENAS_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(BATCH_ESCENAS_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(BATCH_ESCENAS_NAMES)
-    print(f"{GREEN}[BatchEscenas] Loaded{RESET}")
-except Exception as e:
-    print(f"{RED}[BatchEscenas] Failed: {e}{RESET}")
-
-# ============================================================
-#  SUITES API (cada una en try/except independiente)
-# ============================================================
-
-# --- ComfyUI_GoogleAI v2.0.0 (3 nodos: GeminiChat + NanaBanana + GeminiTTS) ---
-try:
-    from .ComfyUI_GoogleAI import (
-        NODE_CLASS_MAPPINGS        as GOOGLEAI_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as GOOGLEAI_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(GOOGLEAI_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(GOOGLEAI_NAMES)
-    print(f"{GREEN}[ComfyUI_GoogleAI] Loaded (v2.0.0 — GeminiChat + NanaBanana + GeminiTTS){RESET}")
-except Exception as e:
-    print(f"{RED}[ComfyUI_GoogleAI] Failed: {e}{RESET}")
-
-# --- ComfyUI_GrokAI v2.0.0 (5 nodos: Chat + Image + Video + TTS + STT) ---
-try:
-    from .ComfyUI_GrokAI import (
-        NODE_CLASS_MAPPINGS        as GROK_CLASS,
-        NODE_DISPLAY_NAME_MAPPINGS as GROK_NAMES,
-    )
-    NODE_CLASS_MAPPINGS.update(GROK_CLASS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(GROK_NAMES)
-    print(f"{GREEN}[ComfyUI_GrokAI] Loaded (v2.0.0 — Chat + Image + Video + TTS + STT){RESET}")
-except Exception as e:
-    print(f"{RED}[ComfyUI_GrokAI] Failed: {e}{RESET}")
-
-# ============================================================
-#  LOG FINAL Y EXPORTACIONES DE COMFYUI
-# ============================================================
-print(f"{YELLOW}[PromptModels Studio] Total nodes: {len(NODE_CLASS_MAPPINGS)}{RESET}")
-print(f"{GREEN}[PromptModels Studio] Ready! v{__version__}{RESET}")
+    from .legacy import ALL_LEGACY_NODES
+except Exception as _e:
+    log.error("[promptmodels] Error cargando legacy nodes: %s", _e)
+    ALL_LEGACY_NODES = []
 
 WEB_DIRECTORY = "./ComfyUI_GoogleAI/web"
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+
+class PromptModelsExtension(ComfyExtension):
+    async def get_node_list(self):
+        return list(ALL_LEGACY_NODES)
+
+    async def on_load(self):
+        log.info(
+            "[promptmodels] %d nodos legacy cargados (todos is_deprecated=True).",
+            len(ALL_LEGACY_NODES),
+        )
+
+
+def comfy_entrypoint():
+    return PromptModelsExtension()
