@@ -1,21 +1,27 @@
 [project]
 name = "promptmodels"
-description = "Custom nodes for ComfyUI by PROMPTMODELS. Google AI (Gemini 3.1 · Nano Banana) and Grok suite (Chat · Image · Video · TTS · STT). Zero SDKs, native REST."
-version = "2.0.1"
+description = "PromptModels Studio — nodos ComfyUI para NVIDIA NIM, Google Gemini y Grok. Zero SDKs externos, solo REST nativo."
+version = "3.0.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
+dependencies = ["requests", "Pillow"]
+
 [project.urls]
 Repository = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS"
 Documentation = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS/wiki"
 "Bug Tracker" = "https://github.com/cdanielp/COMFYUI_PROMPTMODELS/issues"
+
 [tool.comfy]
 PublisherId = "promptmodelsstudio"
 DisplayName = "PromptModels Studio"
 Icon = "https://raw.githubusercontent.com/cdanielp/COMFYUI_PROMPTMODELS/main/prompts%20models%20logo.png"
+requires-comfyui = ">=0.26.0"
 Includes = [
   "__init__.py",
-  "requirements.txt",
+  "core",
+  "nodes",
+  "legacy",
   "ComfyUI_GoogleAI",
   "ComfyUI_GrokAI",
   "GETSETNODE_PRO",

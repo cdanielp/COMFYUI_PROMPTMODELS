@@ -14,4 +14,8 @@ GEMINI_IMAGE: dict[str, str] = {
 
 GEMINI_TEXT: dict[str, str] = {}
 
-GROK_TEXT: dict[str, str] = {}
+GROK_TEXT: dict[str, str] = {
+    "grok-4.1":      "grok-4.3",
+    "grok-4.20":     "grok-4.3",
+    "grok-4.1-fast": "grok-4.3",
+}

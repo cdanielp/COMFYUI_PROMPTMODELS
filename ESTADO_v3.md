@@ -1,47 +1,53 @@
-# Estado migración v3 — promptmodels
+# Estado migracion v3 — promptmodels
 
-> Rama: `v3-migration` | Última actualización: 2026-07-05
-
----
-
-## Completado
-
-| Bloque | Commits | Qué cubre |
-|--------|---------|-----------|
-| Bloques 1-3 | `dd922f6` | core/ (client_rest + keys), 38 legacy migrados a comfy_api v3, `is_deprecated=True` |
-| PASO 0 fix | `a8288e3` | `core/model_aliases.py` + NB default vivo + alias `.get(model,model)` en todos los execute() |
-| BLOQUE 4 | `c6d7171` | `nodes/nvidia_nodes.py`: PMS_NimbusText + PMS_NimbusVision (HTTP 200 ✓) |
-| BLOQUE 5 parcial | `f8aecd2` | `nodes/gemini_nodes.py`: PMS_GeminiChatV3 (HTTP 200 ✓) |
-
-### Arquitectura nodos nuevos v3
-
-```
-nodes/
-  nvidia_nodes.py  → PMS_NimbusText, PMS_NimbusVision
-  gemini_nodes.py  → PMS_GeminiChatV3  (NanoBanana pendiente)
-  __init__.py      → ALL_NEW_NODES (lista en __init__.py raíz via get_node_list)
-```
+> Rama: `v3-migration` | Ultima actualizacion: 2026-07-05
 
 ---
 
-## Pendiente
+## v3.0.0 — Activo
 
-### PMS_NanoBananaGen + PMS_NanoBananaEdit → diferido a v3.1.0
+### Nodos nuevos (sin deprecar, en get_node_list)
 
-**Motivos:**
-1. **Billing Gemini requerido** — el endpoint `/v1beta/interactions` devuelve 429 en
-   free tier sin excepción. Se intentaron ~15 llamadas exploratorias; ninguna pasó.
-2. **Schema `response_format` sin confirmar** — el campo `response_modalities` murió
-   el 20-may-2026 y fue reemplazado por `response_format` (ver abajo). No se puede
-   codificar el parsing hasta tener una respuesta HTTP 200 real.
+| Nodo | Archivo | HTTP 200 |
+|------|---------|----------|
+| PMS_NimbusText | nodes/nvidia_nodes.py | nemotron-3-nano-omni ✓ |
+| PMS_NimbusVision | nodes/nvidia_nodes.py | nemotron-nano-12b-v2-vl ✓ |
+| PMS_GeminiChatV3 | nodes/gemini_nodes.py | gemini-2.5-flash ✓ |
 
-**Schema `/v1beta/interactions` conocido (mapeado por error-probing, julio 2026):**
+### 38 nodos legacy (is_deprecated=True, en get_node_list)
 
+Listados en docs/inventario_legacy.md. No tocar.
+
+### Commits del branch
+
+| Commit | Contenido |
+|--------|-----------|
+| dd922f6 | Bloques 1-3: core/, 38 legacy migrados v3 |
+| a8288e3 | PASO 0: model_aliases.py, NB default vivo |
+| c6d7171 | BLOQUE 4: PMS_NimbusText + PMS_NimbusVision |
+| f8aecd2 | BLOQUE 5 parcial: PMS_GeminiChatV3 |
+| 64b09a1 | docs: ESTADO_v3.md inicial |
+| (actual) | BLOQUE 6 codigo + BLOQUE 7 cierre v3.0.0 |
+
+---
+
+## Pendiente para v3.1.0
+
+### Nano Banana Gen + Edit — DIFERIDO
+
+**Archivos preparados:** `nodes/gemini_nodes.py` (PMS_NanoBananaGen y PMS_NanoBananaEdit estan en el archivo, FUERA de get_node_list)
+
+**Bloqueos:**
+1. **Billing Gemini requerido** — `/v1beta/interactions` siempre 429 en free tier.
+2. **Schema response_format sin confirmar** — `response_modalities` murio el 20-may-2026.
+   El campo correcto es `response_format` (ver abajo). NO codificar hasta tener HTTP 200 real.
+
+**Schema /v1beta/interactions conocido (error-probing julio 2026):**
 ```json
-// GENERATE (texto → imagen)
+// GENERATE
 {
   "model": "gemini-3.1-flash-image",
-  "input": { "type": "text", "text": "A red circle on white background" },
+  "input": { "type": "text", "text": "..." },
   "response_format": {
     "type": "image",
     "mime_type": "image/png",
@@ -50,7 +56,7 @@ nodes/
   }
 }
 
-// EDIT (imagen + instrucción → imagen)
+// EDIT
 {
   "model": "gemini-3.1-flash-image",
   "input": [
@@ -66,37 +72,57 @@ nodes/
 }
 ```
 
-**NOTA CRÍTICA:** el campo `response_format` es la forma correcta según julio 2026.
-`response_modalities` (camelCase o snake_case) está deprecated desde 20-may-2026.
-**No codificar con `response_modalities`.**
-
-**Para retomar (v3.1.0):**
-1. Cargar billing en la cuenta Gemini.
-2. `curl -X POST .../v1beta/interactions?key=... -d @payload_generate.json`
-   → confirmar HTTP 200 y pegar request + response COMPLETOS.
-3. Hacer lo mismo para EDIT.
-4. Solo entonces implementar PMS_NanoBananaGen y PMS_NanoBananaEdit.
+**Para retomar:**
+1. Activar billing en la cuenta Gemini.
+2. Curl 200 real a /v1beta/interactions (generate Y edit).
+3. Confirmar estructura de respuesta (candidates[], inlineData, etc.).
+4. Implementar en gemini_nodes.py y agregar a get_node_list.
 
 ---
 
-### BLOQUE 6 — Grok → PARADO esperando key
+### Grok completo — DIFERIDO
 
-**Motivo:** `XAI_API_KEY` existe en `.env` pero tiene valor **vacío**.
+**Archivos preparados:** `nodes/grok_nodes.py` (PMS_GrokChat, PMS_GrokImageGenV3, PMS_GrokImageEdit, FUERA de get_node_list)
 
-**Para continuar:**
-1. Cargar la XAI API key en `.env`: `XAI_API_KEY=xai-...`
-2. Dar OK para arrancar los nodos Grok v3.
+**Bloqueo:** `XAI_API_KEY` vacia en `.env`.
 
-**Nodos planeados (pendiente confirmación de spec):**
-- PMS_GrokChatV3 — texto, categoría `PromptModels/Grok`
-- (¿PMS_GrokImageV3, PMS_GrokTTSV3?) — confirmar qué endpoints están activos
+**Para retomar:**
+1. Cargar `XAI_API_KEY=xai-...` en `.env`.
+2. Ejecutar prueba real con PMS_GrokChat.
+3. Confirmar endpoints de imagen (generations + edits) con HTTP 200.
+4. Agregar los 3 nodos a get_node_list.
+
+**Aliases GROK_TEXT activos (para el legacy):**
+- grok-4.1, grok-4.20, grok-4.1-fast → grok-4.3
 
 ---
 
-## Notas para el próximo desarrollador
+## Arquitectura v3.0.0
 
-- Los 38 nodos legacy están en `legacy/` con `is_deprecated=True`. **No tocar.**
-- Los nuevos nodos van en `nodes/` y se registran en `nodes/__init__.py`.
-- `core/model_aliases.py` tiene GEMINI_TEXT y GROK_TEXT vacíos: llenar cuando caigan IDs.
-- `core/client_rest.py` maneja retry 429 exponencial. No añadir otra capa de retry.
-- `.env` tiene BOM UTF-8 (leeida con `encoding='utf-8-sig'`). No cambiar el encoding.
+```
+COMFYUI_PROMPTMODELS/
+  __init__.py              # PromptModelsExtension: get_node_list = legacy + new
+  core/
+    client_rest.py         # POST generico + retry 429 + helpers
+    keys.py                # Resolucion de keys: nodo > env > .env
+    model_aliases.py       # GEMINI_IMAGE, GEMINI_TEXT, GROK_TEXT
+  nodes/
+    nvidia_nodes.py        # PMS_NimbusText, PMS_NimbusVision  [ACTIVOS]
+    gemini_nodes.py        # PMS_GeminiChatV3  [ACTIVO]
+                           # PMS_NanoBananaGen, PMS_NanoBananaEdit [v3.1.0]
+    grok_nodes.py          # PMS_GrokChat, PMS_GrokImageGenV3, PMS_GrokImageEdit [v3.1.0]
+    __init__.py            # ALL_NEW_NODES (solo los activos)
+  legacy/                  # 38 nodos migrados, is_deprecated=True
+  ComfyUI_GoogleAI/        # google_core.py y nodos originales (usados por legacy)
+  ComfyUI_GrokAI/          # grok_core.py y nodos originales (usados por legacy)
+  docs/inventario_legacy.md
+```
+
+---
+
+## Notas para el siguiente ciclo
+
+- `core/model_aliases.py`: GEMINI_TEXT vacio, listo para futuros IDs muertos.
+- `.env` usa BOM UTF-8 (`utf-8-sig`). No cambiar el encoding.
+- `core/client_rest.py`: retry 429 exponencial integrado. No anadir otra capa.
+- Los 38 legacy NO deben tocarse. Cualquier fix va en el archivo legacy/, no en las carpetas originales.
