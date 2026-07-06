@@ -2,7 +2,8 @@ from comfy_api.latest import io
 
 # ── model lists (exact V1 strings) ────────────────────────────────
 _TEXT_MODELS = ["gemini-3.1-pro-preview","gemini-3-flash-preview","gemini-2.5-pro","gemini-2.5-flash"]
-_NB_MODELS   = ["gemini-3.1-flash-image-preview","gemini-3-pro-image-preview","gemini-2.5-flash-image"]
+_NB_MODELS   = ["gemini-3.1-flash-image","gemini-3-pro-image",
+                "gemini-3.1-flash-image-preview","gemini-3-pro-image-preview","gemini-2.5-flash-image"]
 _NB_AR       = ["1:1","1:4","1:8","2:3","3:2","3:4","4:1","4:3","4:5","5:4","8:1","9:16","16:9","21:9"]
 _NB_SIZES    = ["512px","0.5K","1K","2K","4K"]
 _IMG_MODELS  = ["imagen-4.0-generate-001","imagen-4.0-ultra-generate-001","imagen-4.0-fast-generate-001",
@@ -55,7 +56,9 @@ class GoogleAI_TextNode(io.ComfyNode):
                 youtube_url="", max_tokens=4096, temperature=0.7) -> io.NodeOutput:
         try:
             from ..ComfyUI_GoogleAI.google_core import GoogleAICore
+            from ..core.model_aliases import GEMINI_TEXT
             key = _gemini_key(api_key)
+            model = GEMINI_TEXT.get(model, model)
             extra_parts = []
             for img in [image_1, image_2, image_3, image_4, image_5]:
                 if img is not None:
@@ -119,7 +122,9 @@ class GoogleAI_TextVisionNode(io.ComfyNode):
                 image_2=None, image_3=None, image_4=None, image_5=None) -> io.NodeOutput:
         try:
             from ..ComfyUI_GoogleAI.google_core import GoogleAICore
+            from ..core.model_aliases import GEMINI_TEXT
             key = _gemini_key(api_key)
+            model = GEMINI_TEXT.get(model, model)
             extra_parts = []
             for img in [image_1, image_2, image_3, image_4, image_5]:
                 if img is not None:
@@ -145,7 +150,7 @@ class GoogleAI_NanoBananaNode(io.ComfyNode):
             inputs=[
                 io.String.Input("prompt", multiline=True,
                                 default="A beautiful cinematic portrait, photorealistic, 8K detail"),
-                io.Combo.Input("model", options=_NB_MODELS, default="gemini-3.1-flash-image-preview"),
+                io.Combo.Input("model", options=_NB_MODELS, default="gemini-3.1-flash-image"),
                 io.Combo.Input("aspect_ratio", options=_NB_AR, default="1:1",
                                tooltip="14 ratios oficiales. Extremos (1:4,4:1,1:8,8:1) solo NB2."),
                 io.Combo.Input("image_size", options=_NB_SIZES, default="2K",
@@ -179,7 +184,9 @@ class GoogleAI_NanoBananaNode(io.ComfyNode):
         try:
             import random
             from ..ComfyUI_GoogleAI.google_core import GoogleAICore, SAFETY_THRESHOLDS
+            from ..core.model_aliases import GEMINI_IMAGE
             key = _gemini_key(api_key)
+            model = GEMINI_IMAGE.get(model, model)
             eff_seed = random.randint(0, 0xffffffffffffffff) if randomize_seed else seed
             refs = []
             for ref in [image_1, image_2, image_3, image_4, image_5]:
@@ -411,7 +418,9 @@ class GoogleAI_VideoStoryboard(io.ComfyNode):
 # ═══════════════ Diagnostic nodes (8-12) ══════════════════════════
 def _diag_exec(api_key, model, prompt_text):
     from ..ComfyUI_GoogleAI.google_core import GoogleAICore
+    from ..core.model_aliases import GEMINI_TEXT
     key = _gemini_key(api_key)
+    model = GEMINI_TEXT.get(model, model)
     return GoogleAICore.call_gemini_text(api_key=key, prompt=prompt_text, model=model)
 
 

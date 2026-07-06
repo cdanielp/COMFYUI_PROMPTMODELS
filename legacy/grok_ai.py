@@ -32,7 +32,9 @@ class GrokTextNode(io.ComfyNode):
         try:
             from ..core.keys import grok_key
             from ..core.client_rest import post_openai
+            from ..core.model_aliases import GROK_TEXT
             key = grok_key(api_key)
+            model = GROK_TEXT.get(model, model)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
