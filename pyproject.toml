@@ -1,7 +1,7 @@
 [project]
 name = "promptmodels"
 description = "PromptModels Studio-nodos ComfyUI para NVIDIA NIM, Google Gemini y Grok. Zero SDKs externos, solo REST nativo."
-version = "3.0.0"
+version = "3.0.1"
 license = { file = "LICENSE" }
 readme = "README.md"
 authors = [{ name = "PROMPTMODELS Studio" }]
